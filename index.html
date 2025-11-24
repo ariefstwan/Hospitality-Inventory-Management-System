@@ -1,0 +1,840 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <title>RedPartners – Inventory & Procurement</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+
+<body>
+  <div class="app-root">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar__logo">
+        <div class="logo-dot"></div>
+        <span>RedPartners</span>
+      </div>
+      <nav class="sidebar__nav">
+        <button class="nav-item active" data-page="room-inventory">Room Inventory</button>
+        <button class="nav-item" data-page="laundry-inventory">Laundry Inventory</button>
+        <button class="nav-item" data-page="stock-movements">Stock Movements</button>
+        <button class="nav-item" data-page="stock-alert">Stock Alert</button>
+        <button class="nav-item" data-page="stock-opname">Stock Opname</button>
+        <button class="nav-item" data-page="replenishment-requests">Replenishment Requests</button>
+        <button class="nav-item" data-page="procurement-overview">Procurement Overview</button>
+        <button class="nav-item" data-page="stock-on-hand">Stock On Hand</button>
+      </nav>
+    </aside>
+
+    <!-- Main layout -->
+    <div class="app-main">
+      <!-- Header -->
+      <header class="header">
+        <div class="header__title">
+          <h1>RedPartners – Inventory</h1>
+          <p class="header__subtitle">Inventory & Procurement Dashboard</p>
+        </div>
+
+        <div class="header__controls">
+          <div class="header__field">
+            <label for="propertySelect">Property</label>
+            <select id="propertySelect">
+              <option>Urbanview Jakarta Sudirman</option>
+              <option>RedDoorz Plus @ Dago Bandung</option>
+              <option>Sans Hotel Jakarta Thamrin</option>
+            </select>
+          </div>
+          <div class="header__user">
+            <div class="avatar">R</div>
+            <div class="user-meta">
+              <span class="user-name">Reddy</span>
+              <span class="user-role">Junior Product Manager</span>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <!-- Page container -->
+      <main class="main">
+        <!-- Room Inventory Page -->
+        <section id="page-room-inventory" class="page page--active">
+          <div class="page-header">
+            <div>
+              <h2>Room Inventory</h2>
+              <p>Manage room-related operating supplies & equipment.</p>
+            </div>
+            <button id="btnAddRoomItem" class="btn btn-primary">Add Room Item</button>
+          </div>
+
+          <div class="filters-row">
+            <div class="filter-group">
+              <input id="roomSearchInput" class="input" type="text" placeholder="Search item name" />
+            </div>
+            <div class="filter-group">
+              <select id="roomCategoryFilter" class="input">
+                <option value="all">All Categories</option>
+                <option value="Amenities">Amenities</option>
+                <option value="Beverage">Beverage</option>
+                <option value="Disposable">Disposable</option>
+                <option value="Room Equipment">Room Equipment</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <select id="roomStatusFilter" class="input">
+                <option value="all">All Status</option>
+                <option value="ACTIVE">Active</option>
+                <option value="ARCHIVED">Archived</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Item Name</th>
+                    <th>Category</th>
+                    <th>Unit</th>
+                    <th>Mandatory</th>
+                    <th>Par / Room</th>
+                    <th>Min Stock</th>
+                    <th>Max Stock</th>
+                    <th>On-hand</th>
+                    <th>Status</th>
+                    <th class="table-actions-col">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="roomInventoryTableBody">
+                  <!-- Filled by JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- Laundry Inventory Page -->
+        <section id="page-laundry-inventory" class="page">
+          <div class="page-header">
+            <div>
+              <h2>Laundry Inventory</h2>
+              <p>Manage linens and textile inventory.</p>
+            </div>
+            <button id="btnAddLaundryItem" class="btn btn-primary">Add Laundry Item</button>
+          </div>
+
+          <div class="filters-row">
+            <div class="filter-group">
+              <input id="laundrySearchInput" class="input" type="text" placeholder="Search item name" />
+            </div>
+            <div class="filter-group">
+              <select id="laundryCategoryFilter" class="input">
+                <option value="all">All Categories</option>
+                <option value="Bedsheet">Bedsheet</option>
+                <option value="Pillowcase">Pillowcase</option>
+                <option value="Duvet Cover">Duvet Cover</option>
+                <option value="Bath Towel">Bath Towel</option>
+                <option value="Bath Mat">Bath Mat</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <select id="laundryStatusFilter" class="input">
+                <option value="all">All Status</option>
+                <option value="ACTIVE">Active</option>
+                <option value="ARCHIVED">Archived</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Item Name</th>
+                    <th>Category</th>
+                    <th>Size / Spec</th>
+                    <th>Unit</th>
+                    <th>Par / Room</th>
+                    <th>Min Stock</th>
+                    <th>On-hand</th>
+                    <th>Mandatory</th>
+                    <th>Status</th>
+                    <th class="table-actions-col">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="laundryInventoryTableBody">
+                  <!-- Filled by JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- Stock Movements Page -->
+        <section id="page-stock-movements" class="page">
+          <div class="page-header">
+            <div>
+              <h2>Stock Movements</h2>
+              <p>Document incoming and outgoing stock (VHP-style).</p>
+            </div>
+          </div>
+
+          <div class="tab-row">
+            <button class="tab-btn active" data-movement-tab="IN">Incoming</button>
+            <button class="tab-btn" data-movement-tab="OUT">Outgoing</button>
+          </div>
+
+          <div class="card movement-panel" data-movement-panel="IN">
+            <div class="form-grid">
+              <div class="form-group">
+                <label for="incomingDate">Date</label>
+                <input id="incomingDate" type="date" class="input" />
+              </div>
+              <div class="form-group">
+                <label for="incomingProperty">Property</label>
+                <input id="incomingProperty" class="input" />
+              </div>
+              <div class="form-group">
+                <label for="incomingSourceType">Source Type</label>
+                <select id="incomingSourceType" class="input">
+                  <option value="WITH_PO">With PO</option>
+                  <option value="WITHOUT_PO">Without PO</option>
+                  <option value="ADJUSTMENT">Adjustment</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="incomingReference">Reference</label>
+                <input id="incomingReference" class="input" placeholder="PO number or note" />
+              </div>
+            </div>
+
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Item</th>
+                    <th>UOM</th>
+                    <th>Qty</th>
+                  </tr>
+                </thead>
+                <tbody id="incomingLinesTableBody"></tbody>
+              </table>
+            </div>
+
+            <div class="panel-actions">
+              <button id="btnAddIncomingLine" class="btn btn-secondary btn-sm">Add Line</button>
+              <div style="flex:1"></div>
+              <button id="btnPostIncoming" class="btn btn-primary">Post Incoming</button>
+            </div>
+
+            <div class="table-wrapper" style="margin-top:12px;">
+              <table>
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Date</th>
+                    <th>Property</th>
+                    <th>Reference</th>
+                    <th>Lines</th>
+                    <th>Total Qty</th>
+                  </tr>
+                </thead>
+                <tbody id="incomingDocsTableBody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="card movement-panel hidden" data-movement-panel="OUT">
+            <div class="form-grid">
+              <div class="form-group">
+                <label for="outgoingDate">Date</label>
+                <input id="outgoingDate" type="date" class="input" />
+              </div>
+              <div class="form-group">
+                <label for="outgoingProperty">Property</label>
+                <input id="outgoingProperty" class="input" />
+              </div>
+              <div class="form-group">
+                <label for="outgoingDestType">Destination</label>
+                <select id="outgoingDestType" class="input">
+                  <option value="DEPARTMENT">Department</option>
+                  <option value="COMPLIMENTARY">Complimentary</option>
+                  <option value="WASTAGE">Wastage</option>
+                  <option value="ADJUSTMENT">Adjustment</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="outgoingDestRef">Destination Ref</label>
+                <input id="outgoingDestRef" class="input" placeholder="Housekeeping, Guest, etc." />
+              </div>
+            </div>
+
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Item</th>
+                    <th>UOM</th>
+                    <th>Qty</th>
+                  </tr>
+                </thead>
+                <tbody id="outgoingLinesTableBody"></tbody>
+              </table>
+            </div>
+
+            <div class="panel-actions">
+              <button id="btnAddOutgoingLine" class="btn btn-secondary btn-sm">Add Line</button>
+              <div style="flex:1"></div>
+              <button id="btnPostOutgoing" class="btn btn-primary">Post Outgoing</button>
+            </div>
+
+            <div class="table-wrapper" style="margin-top:12px;">
+              <table>
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Date</th>
+                    <th>Property</th>
+                    <th>Destination</th>
+                    <th>Lines</th>
+                    <th>Total Qty</th>
+                  </tr>
+                </thead>
+                <tbody id="outgoingDocsTableBody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="page-header" style="margin-bottom:8px;">
+              <div>
+                <h3 style="margin:0;">Moving Stock (Last 10 lines)</h3>
+                <p class="header__subtitle">Flattened view of posted incoming/outgoing.</p>
+              </div>
+            </div>
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Doc ID</th>
+                    <th>Direction</th>
+                    <th>Item</th>
+                    <th>Qty</th>
+                    <th>UOM</th>
+                    <th>Property</th>
+                  </tr>
+                </thead>
+                <tbody id="movementRecentTableBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- Stock Alert Page -->
+        <section id="page-stock-alert" class="page">
+          <div class="page-header">
+            <div>
+              <h2>Stock Alert</h2>
+              <p>Monitor items below minimum stock & prepare replenishment.</p>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <label style="font-size:12px;color:var(--rp-text-muted);">Select</label>
+              <input type="checkbox" title="Select all alerts" />
+              <button id="btnCreateReplenishmentFromAlert" class="btn btn-primary" disabled>
+                Create Replenishment Request
+              </button>
+            </div>
+          </div>
+
+          <div class="filters-row">
+            <div class="filter-group">
+              <select id="alertStatusFilter" class="input">
+                <option value="all">All</option>
+                <option value="critical">Critical</option>
+                <option value="below">Below Min</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th style="width:36px; text-align:center;"><input type="checkbox" id="selectAllAlerts" /></th>
+                    <th>Item Name</th>
+                    <th>Type</th>
+                    <th>On-hand</th>
+                    <th>Min Stock</th>
+                    <th>Status</th>
+                    <th>Mandatory</th>
+                    <th>Suggested Qty</th>
+                    <th>Last 7d Usage</th>
+                  </tr>
+                </thead>
+                <tbody id="stockAlertTableBody">
+                  <!-- Filled by JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- Stock Opname Page -->
+        <section id="page-stock-opname" class="page">
+          <div class="page-header">
+            <div>
+              <h2>Stock Opname</h2>
+              <p>Schedule and record physical stock counts.</p>
+            </div>
+            <button id="btnNewStockOpname" class="btn btn-primary">New Stock Opname</button>
+          </div>
+
+          <div class="card">
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Session Name</th>
+                    <th>Coverage</th>
+                    <th>Scheduled Date</th>
+                    <th>Status</th>
+                    <th>Created By</th>
+                    <th>Last Updated</th>
+                    <th class="table-actions-col">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="stockOpnameTableBody">
+                  <!-- Filled by JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Detail panel (simple inline panel for now) -->
+          <div id="stockOpnameDetailPanel" class="card card--detail hidden">
+            <div class="detail-header">
+              <div>
+                <h3 id="detailOpnameTitle">Stock Opname Detail</h3>
+                <p id="detailOpnameMeta"></p>
+              </div>
+              <div class="detail-actions">
+                <button id="btnSubmitOpname" class="btn btn-secondary">Submit for Approval</button>
+                <button id="btnApproveOpname" class="btn btn-primary">Approve & Post Adjustments</button>
+              </div>
+            </div>
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Item Name</th>
+                    <th>Type</th>
+                    <th>System Qty</th>
+                    <th>Counted Qty</th>
+                    <th>Variance</th>
+                    <th>Notes</th>
+                  </tr>
+                </thead>
+                <tbody id="stockOpnameLinesTableBody">
+                  <!-- Filled by JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- Replenishment Requests Page -->
+        <section id="page-replenishment-requests" class="page">
+          <div class="page-header">
+            <div>
+              <h2>Replenishment Requests</h2>
+              <p>Track inventory-based replenishment requests.</p>
+            </div>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <button id="btnNewReplenishment" class="btn btn-primary">New Replenishment Request</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Request ID</th>
+                    <th>Property</th>
+                    <th>Requestor</th>
+                    <th>Items</th>
+                    <th>Status</th>
+                    <th>Created</th>
+                    <th>Last Updated</th>
+                    <th class="table-actions-col">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="replenishmentTableBody">
+                  <!-- Filled by JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Replenishment Detail / Create panel -->
+          <div id="replenishmentDetailPanel" class="card card--detail hidden">
+            <div class="detail-header">
+              <div>
+                <h3 id="replDetailTitle">Replenishment Request</h3>
+                <p id="replDetailMeta"></p>
+              </div>
+              <div class="detail-actions">
+                <button id="btnSaveReplenishment" class="btn btn-primary">Save as Draft</button>
+                <button id="btnAddReplenishmentLine" class="btn btn-secondary">Add Line</button>
+              </div>
+            </div>
+
+            <div class="form-grid">
+              <div class="form-group">
+                <label for="replPropertyInput">Property</label>
+                <input id="replPropertyInput" class="input" />
+              </div>
+              <div class="form-group">
+                <label for="replRequestorInput">Requestor Name</label>
+                <input id="replRequestorInput" class="input" />
+              </div>
+              <div class="form-group">
+                <label for="replRoleInput">Requestor Role</label>
+                <input id="replRoleInput" class="input" />
+              </div>
+              <div class="form-group">
+                <label for="replDateInput">Request Date</label>
+                <input id="replDateInput" type="date" class="input" />
+              </div>
+              <div class="form-group form-group--full">
+                <label for="replNotesInput">Notes for Procurement</label>
+                <textarea id="replNotesInput" class="input" rows="2"></textarea>
+              </div>
+            </div>
+
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Item Name</th>
+                    <th>Type</th>
+                    <th>Current Stock</th>
+                    <th>Min Stock</th>
+                    <th>Last 7d Usage</th>
+                    <th>Suggested Qty</th>
+                    <th>Requested Qty</th>
+                    <th>Mandatory</th>
+                    <th>Notes</th>
+                  </tr>
+                </thead>
+                <tbody id="replItemsTableBody">
+                  <!-- Filled by JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- Procurement Overview Page -->
+        <section id="page-procurement-overview" class="page">
+          <div class="page-header">
+            <div>
+              <h2>Procurement Overview</h2>
+              <p>View inventory-driven demand across properties.</p>
+            </div>
+          </div>
+
+          <div class="filters-row">
+            <div class="filter-group">
+              <select id="overviewCountryFilter" class="input">
+                <option value="all">All Countries</option>
+                <option value="ID">Indonesia</option>
+                <option value="PH">Philippines</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <select id="overviewBrandFilter" class="input">
+                <option value="all">All Brands</option>
+                <option value="RedDoorz">RedDoorz</option>
+                <option value="Sans">Sans</option>
+                <option value="Urbanview">Urbanview</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <label class="checkbox-label">
+                <input id="overviewMandatoryOnly" type="checkbox" />
+                Show Mandatory Only
+              </label>
+            </div>
+          </div>
+
+          <div class="kpi-row">
+            <div class="kpi-card">
+              <h4>Items in Critical</h4>
+              <p id="kpiCriticalItems" class="kpi-value">0</p>
+            </div>
+            <div class="kpi-card">
+              <h4>Mandatory Items Below Min</h4>
+              <p id="kpiMandatoryBelow" class="kpi-value">0</p>
+            </div>
+            <div class="kpi-card">
+              <h4>Total Shortage</h4>
+              <p id="kpiTotalShortage" class="kpi-value">0</p>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Item Name</th>
+                    <th>Type</th>
+                    <th>Mandatory</th>
+                    <th>Shortage (Current Property)</th>
+                  </tr>
+                </thead>
+                <tbody id="overviewTableBody">
+                  <!-- Filled by JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- Stock On Hand Report -->
+        <section id="page-stock-on-hand" class="page">
+          <div class="page-header">
+            <div>
+              <h2>Stock On Hand</h2>
+              <p>Combined view of room & laundry inventory.</p>
+            </div>
+          </div>
+          <div class="card">
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Item Name</th>
+                    <th>Type</th>
+                    <th>UOM</th>
+                    <th>On Hand</th>
+                    <th>Min Stock</th>
+                    <th>Max Stock</th>
+                    <th>Mandatory</th>
+                  </tr>
+                </thead>
+                <tbody id="stockOnHandTableBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- Modals -->
+
+  <!-- Room Item Modal -->
+  <div id="modalRoomItem" class="modal hidden">
+    <div class="modal__backdrop"></div>
+    <div class="modal__content">
+      <div class="modal__header">
+        <h3 id="modalRoomTitle">Add Room Item</h3>
+        <button class="modal__close" data-close-modal="modalRoomItem">&times;</button>
+      </div>
+      <div class="modal__body">
+        <form id="roomItemForm">
+          <input type="hidden" id="roomItemId" />
+          <div class="form-grid">
+            <div class="form-group">
+              <label for="roomItemName">Item Name</label>
+              <input id="roomItemName" class="input" required />
+            </div>
+            <div class="form-group">
+              <label for="roomItemCategory">Category</label>
+              <select id="roomItemCategory" class="input">
+                <option value="Amenities">Amenities</option>
+                <option value="Beverage">Beverage</option>
+                <option value="Disposable">Disposable</option>
+                <option value="Room Equipment">Room Equipment</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="roomItemUnit">Unit</label>
+              <select id="roomItemUnit" class="input"></select>
+            </div>
+            <div class="form-group">
+              <label class="checkbox-label">
+                <input id="roomItemMandatory" type="checkbox" />
+                Mandatory Item
+              </label>
+            </div>
+            <div class="form-group">
+              <label for="roomParPerRoom">Par per Room</label>
+              <input id="roomParPerRoom" type="number" class="input" min="0" value="0" />
+            </div>
+            <div class="form-group">
+              <label for="roomMinStock">Min Stock</label>
+              <input id="roomMinStock" type="number" class="input" min="0" value="0" />
+            </div>
+            <div class="form-group">
+              <label for="roomMaxStock">Max Stock</label>
+              <input id="roomMaxStock" type="number" class="input" min="0" value="0" />
+            </div>
+            <div class="form-group form-group--full">
+              <p class="info-text" id="roomOnHandInfo">Current On Hand: 0 (read-only; updated via movements/opname).</p>
+            </div>
+          </div>
+        </form>
+      </div>
+      <div class="modal__footer">
+        <button class="btn btn-secondary" data-close-modal="modalRoomItem">Cancel</button>
+        <button id="btnSaveRoomItem" class="btn btn-primary">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Laundry Item Modal -->
+  <div id="modalLaundryItem" class="modal hidden">
+    <div class="modal__backdrop"></div>
+    <div class="modal__content">
+      <div class="modal__header">
+        <h3 id="modalLaundryTitle">Add Laundry Item</h3>
+        <button class="modal__close" data-close-modal="modalLaundryItem">&times;</button>
+      </div>
+      <div class="modal__body">
+        <form id="laundryItemForm">
+          <input type="hidden" id="laundryItemId" />
+          <div class="form-grid">
+            <div class="form-group">
+              <label for="laundryItemName">Item Name</label>
+              <input id="laundryItemName" class="input" required />
+            </div>
+            <div class="form-group">
+              <label for="laundryItemCategory">Category</label>
+              <select id="laundryItemCategory" class="input">
+                <option value="Bedsheet">Bedsheet</option>
+                <option value="Pillowcase">Pillowcase</option>
+                <option value="Duvet Cover">Duvet Cover</option>
+                <option value="Bath Towel">Bath Towel</option>
+                <option value="Bath Mat">Bath Mat</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="laundryItemSize">Size / Spec</label>
+              <input id="laundryItemSize" class="input" placeholder="e.g. 160x200cm, 500gsm" />
+            </div>
+            <div class="form-group">
+              <label for="laundryItemUnit">Unit</label>
+              <select id="laundryItemUnit" class="input"></select>
+            </div>
+            <div class="form-group">
+              <label class="checkbox-label">
+                <input id="laundryItemMandatory" type="checkbox" />
+                Mandatory Item
+              </label>
+            </div>
+            <div class="form-group">
+              <label for="laundryParPerRoom">Par per Room</label>
+              <input id="laundryParPerRoom" type="number" class="input" min="0" value="0" />
+            </div>
+            <div class="form-group">
+              <label for="laundryMinStock">Min Stock</label>
+              <input id="laundryMinStock" type="number" class="input" min="0" value="0" />
+            </div>
+            <div class="form-group form-group--full">
+              <p class="info-text" id="laundryOnHandInfo">Current On Hand: 0 (read-only; updated via movements/opname).
+              </p>
+            </div>
+          </div>
+        </form>
+      </div>
+      <div class="modal__footer">
+        <button class="btn btn-secondary" data-close-modal="modalLaundryItem">Cancel</button>
+        <button id="btnSaveLaundryItem" class="btn btn-primary">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Adjust Stock Modal -->
+  <div id="modalAdjustStock" class="modal hidden">
+    <div class="modal__backdrop"></div>
+    <div class="modal__content">
+      <div class="modal__header">
+        <h3>Adjust Stock</h3>
+        <button class="modal__close" data-close-modal="modalAdjustStock">&times;</button>
+      </div>
+      <div class="modal__body">
+        <input type="hidden" id="adjustItemId" />
+        <input type="hidden" id="adjustItemType" />
+        <p id="adjustItemName" style="margin:0 0 8px; font-weight:600;"></p>
+        <p id="adjustCurrent" class="info-text" style="margin:0 0 12px;">Current On Hand: 0</p>
+        <div class="form-grid">
+          <div class="form-group">
+            <label for="adjustTargetQty">Target Qty</label>
+            <input id="adjustTargetQty" type="number" min="0" class="input" />
+          </div>
+          <div class="form-group">
+            <label for="adjustReason">Reason</label>
+            <input id="adjustReason" class="input" placeholder="Breakage, audit, etc." />
+          </div>
+        </div>
+        <p class="info-text">Adjustment posts a movement (IN for increase, OUT for decrease).</p>
+      </div>
+      <div class="modal__footer">
+        <button class="btn btn-secondary" data-close-modal="modalAdjustStock">Cancel</button>
+        <button id="btnSubmitAdjustStock" class="btn btn-primary">Post Adjustment</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- New Stock Opname Modal -->
+  <div id="modalStockOpname" class="modal hidden">
+    <div class="modal__backdrop"></div>
+    <div class="modal__content">
+      <div class="modal__header">
+        <h3>New Stock Opname</h3>
+        <button class="modal__close" data-close-modal="modalStockOpname">&times;</button>
+      </div>
+      <div class="modal__body">
+        <form id="stockOpnameForm">
+          <div class="form-grid">
+            <div class="form-group">
+              <label for="opnameNameInput">Session Name</label>
+              <input id="opnameNameInput" class="input" required />
+            </div>
+            <div class="form-group">
+              <label for="opnameCoverageInput">Coverage</label>
+              <select id="opnameCoverageInput" class="input">
+                <option value="ROOM">Room Inventory</option>
+                <option value="LAUNDRY">Laundry Inventory</option>
+                <option value="BOTH">Both</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="opnameDateInput">Target Date</label>
+              <input id="opnameDateInput" type="date" class="input" />
+            </div>
+          </div>
+        </form>
+      </div>
+      <div class="modal__footer">
+        <button class="btn btn-secondary" data-close-modal="modalStockOpname">Cancel</button>
+        <button id="btnCreateStockOpname" class="btn btn-primary">Create Session</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="app.js"></script>
+</body>
+
+</html>
