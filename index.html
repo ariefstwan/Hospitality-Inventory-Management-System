@@ -46,11 +46,18 @@
               <option>Sans Hotel Jakarta Thamrin</option>
             </select>
           </div>
-          <div class="header__user">
-            <div class="avatar">R</div>
-            <div class="user-meta">
-              <span class="user-name">Reddy</span>
-              <span class="user-role">Junior Product Manager</span>
+          <div class="header__user profile-switcher">
+            <button class="profile-toggle" id="profileToggle" aria-haspopup="true" aria-expanded="false">
+              <div class="avatar" id="headerAvatar">U</div>
+              <div class="user-meta">
+                <span class="user-name" id="headerUserName">User</span>
+                <span class="user-role" id="headerUserRole">Role</span>
+              </div>
+              <span class="chevron" aria-hidden="true">&#9662;</span>
+            </button>
+            <div class="profile-menu hidden" id="profileMenu">
+              <div class="profile-menu__title">Switch Profile</div>
+              <div class="profile-menu__list" id="profileMenuList"></div>
             </div>
           </div>
         </div>
@@ -182,116 +189,38 @@
             </div>
           </div>
 
-          <div class="tab-row">
-            <button class="tab-btn active" data-movement-tab="IN">Incoming</button>
-            <button class="tab-btn" data-movement-tab="OUT">Outgoing</button>
-          </div>
-
-          <div class="card movement-panel" data-movement-panel="IN">
-            <div class="form-grid">
-              <div class="form-group">
-                <label for="incomingDate">Date</label>
-                <input id="incomingDate" type="date" class="input" />
+          <div class="card">
+            <div class="movement-header">
+              <div class="tab-row">
+                <button class="tab-btn active" data-record-tab="IN">Incoming Records</button>
+                <button class="tab-btn" data-record-tab="OUT">Outgoing Records</button>
               </div>
-              <div class="form-group">
-                <label for="incomingProperty">Property</label>
-                <input id="incomingProperty" class="input" />
-              </div>
-              <div class="form-group">
-                <label for="incomingSourceType">Source Type</label>
-                <select id="incomingSourceType" class="input">
-                  <option value="WITH_PO">With PO</option>
-                  <option value="WITHOUT_PO">Without PO</option>
-                  <option value="ADJUSTMENT">Adjustment</option>
-                </select>
-              </div>
-              <div class="form-group">
-                <label for="incomingReference">Reference</label>
-                <input id="incomingReference" class="input" placeholder="PO number or note" />
+              <div class="movement-actions">
+                <button id="btnOpenIncomingModal" class="btn btn-primary" data-record-action="IN">New Incoming</button>
+                <button id="btnOpenOutgoingModal" class="btn btn-secondary" data-record-action="OUT">New
+                  Outgoing</button>
               </div>
             </div>
 
-            <div class="table-wrapper">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Item</th>
-                    <th>UOM</th>
-                    <th>Qty</th>
-                  </tr>
-                </thead>
-                <tbody id="incomingLinesTableBody"></tbody>
-              </table>
-            </div>
-
-            <div class="panel-actions">
-              <button id="btnAddIncomingLine" class="btn btn-secondary btn-sm">Add Line</button>
-              <div style="flex:1"></div>
-              <button id="btnPostIncoming" class="btn btn-primary">Post Incoming</button>
-            </div>
-
-            <div class="table-wrapper" style="margin-top:12px;">
+            <div class="table-wrapper movement-panel" data-record-panel="IN">
               <table>
                 <thead>
                   <tr>
                     <th>ID</th>
                     <th>Date</th>
                     <th>Property</th>
-                    <th>Reference</th>
+                    <th>PO</th>
+                    <th>Status</th>
                     <th>Lines</th>
                     <th>Total Qty</th>
+                    <th class="table-actions-col">Actions</th>
                   </tr>
                 </thead>
                 <tbody id="incomingDocsTableBody"></tbody>
               </table>
             </div>
-          </div>
 
-          <div class="card movement-panel hidden" data-movement-panel="OUT">
-            <div class="form-grid">
-              <div class="form-group">
-                <label for="outgoingDate">Date</label>
-                <input id="outgoingDate" type="date" class="input" />
-              </div>
-              <div class="form-group">
-                <label for="outgoingProperty">Property</label>
-                <input id="outgoingProperty" class="input" />
-              </div>
-              <div class="form-group">
-                <label for="outgoingDestType">Destination</label>
-                <select id="outgoingDestType" class="input">
-                  <option value="DEPARTMENT">Department</option>
-                  <option value="COMPLIMENTARY">Complimentary</option>
-                  <option value="WASTAGE">Wastage</option>
-                  <option value="ADJUSTMENT">Adjustment</option>
-                </select>
-              </div>
-              <div class="form-group">
-                <label for="outgoingDestRef">Destination Ref</label>
-                <input id="outgoingDestRef" class="input" placeholder="Housekeeping, Guest, etc." />
-              </div>
-            </div>
-
-            <div class="table-wrapper">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Item</th>
-                    <th>UOM</th>
-                    <th>Qty</th>
-                  </tr>
-                </thead>
-                <tbody id="outgoingLinesTableBody"></tbody>
-              </table>
-            </div>
-
-            <div class="panel-actions">
-              <button id="btnAddOutgoingLine" class="btn btn-secondary btn-sm">Add Line</button>
-              <div style="flex:1"></div>
-              <button id="btnPostOutgoing" class="btn btn-primary">Post Outgoing</button>
-            </div>
-
-            <div class="table-wrapper" style="margin-top:12px;">
+            <div class="table-wrapper movement-panel hidden" data-record-panel="OUT">
               <table>
                 <thead>
                   <tr>
@@ -299,8 +228,10 @@
                     <th>Date</th>
                     <th>Property</th>
                     <th>Destination</th>
+                    <th>Status</th>
                     <th>Lines</th>
                     <th>Total Qty</th>
+                    <th class="table-actions-col">Actions</th>
                   </tr>
                 </thead>
                 <tbody id="outgoingDocsTableBody"></tbody>
@@ -311,25 +242,43 @@
           <div class="card">
             <div class="page-header" style="margin-bottom:8px;">
               <div>
-                <h3 style="margin:0;">Moving Stock (Last 10 lines)</h3>
-                <p class="header__subtitle">Flattened view of posted incoming/outgoing.</p>
+                <h3 style="margin:0;">Movement History</h3>
+                <p class="header__subtitle">View, modify, discard, revert, or re-open movements.</p>
+              </div>
+              <div class="filters-row" style="margin:0;">
+                <div class="filter-group">
+                  <select id="movementDirectionFilter" class="input">
+                    <option value="ALL">All</option>
+                    <option value="IN">Incoming</option>
+                    <option value="OUT">Outgoing</option>
+                  </select>
+                </div>
+                <div class="filter-group">
+                  <input id="movementSearchInput" class="input" placeholder="Search ID or property" />
+                </div>
               </div>
             </div>
             <div class="table-wrapper">
               <table>
                 <thead>
                   <tr>
-                    <th>Date</th>
-                    <th>Doc ID</th>
+                    <th>ID</th>
                     <th>Direction</th>
-                    <th>Item</th>
-                    <th>Qty</th>
-                    <th>UOM</th>
+                    <th>Date</th>
                     <th>Property</th>
+                    <th>Status</th>
+                    <th>Lines</th>
+                    <th>Total Qty</th>
+                    <th class="table-actions-col">Actions</th>
                   </tr>
                 </thead>
-                <tbody id="movementRecentTableBody"></tbody>
+                <tbody id="movementHistoryTableBody"></tbody>
               </table>
+            </div>
+            <div class="pagination">
+              <button id="movementPrevPage" class="btn btn-secondary btn-sm">Prev</button>
+              <span id="movementPageInfo" class="info-text"></span>
+              <button id="movementNextPage" class="btn btn-secondary btn-sm">Next</button>
             </div>
           </div>
         </section>
@@ -480,64 +429,6 @@
               </table>
             </div>
           </div>
-
-          <!-- Replenishment Detail / Create panel -->
-          <div id="replenishmentDetailPanel" class="card card--detail hidden">
-            <div class="detail-header">
-              <div>
-                <h3 id="replDetailTitle">Replenishment Request</h3>
-                <p id="replDetailMeta"></p>
-              </div>
-              <div class="detail-actions">
-                <button id="btnSaveReplenishment" class="btn btn-primary">Save as Draft</button>
-                <button id="btnAddReplenishmentLine" class="btn btn-secondary">Add Line</button>
-              </div>
-            </div>
-
-            <div class="form-grid">
-              <div class="form-group">
-                <label for="replPropertyInput">Property</label>
-                <input id="replPropertyInput" class="input" />
-              </div>
-              <div class="form-group">
-                <label for="replRequestorInput">Requestor Name</label>
-                <input id="replRequestorInput" class="input" />
-              </div>
-              <div class="form-group">
-                <label for="replRoleInput">Requestor Role</label>
-                <input id="replRoleInput" class="input" />
-              </div>
-              <div class="form-group">
-                <label for="replDateInput">Request Date</label>
-                <input id="replDateInput" type="date" class="input" />
-              </div>
-              <div class="form-group form-group--full">
-                <label for="replNotesInput">Notes for Procurement</label>
-                <textarea id="replNotesInput" class="input" rows="2"></textarea>
-              </div>
-            </div>
-
-            <div class="table-wrapper">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Item Name</th>
-                    <th>Type</th>
-                    <th>Current Stock</th>
-                    <th>Min Stock</th>
-                    <th>Last 7d Usage</th>
-                    <th>Suggested Qty</th>
-                    <th>Requested Qty</th>
-                    <th>Mandatory</th>
-                    <th>Notes</th>
-                  </tr>
-                </thead>
-                <tbody id="replItemsTableBody">
-                  <!-- Filled by JS -->
-                </tbody>
-              </table>
-            </div>
-          </div>
         </section>
 
         <!-- Procurement Overview Page -->
@@ -614,6 +505,7 @@
               <h2>Stock On Hand</h2>
               <p>Combined view of room & laundry inventory.</p>
             </div>
+            <button id="btnPrintStockOnHand" class="btn btn-secondary">Print On-hand</button>
           </div>
           <div class="card">
             <div class="table-wrapper">
@@ -827,6 +719,286 @@
       <div class="modal__footer">
         <button class="btn btn-secondary" data-close-modal="modalStockOpname">Cancel</button>
         <button id="btnCreateStockOpname" class="btn btn-primary">Create Session</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Movement Detail Modal -->
+  <div id="modalMovementDetail" class="modal hidden">
+    <div class="modal__backdrop"></div>
+    <div class="modal__content">
+      <div class="modal__header">
+        <h3 id="movementDetailTitle">Movement Detail</h3>
+        <button class="modal__close" data-close-modal="modalMovementDetail">&times;</button>
+      </div>
+      <div class="modal__body">
+        <p id="movementDetailMeta" class="info-text"></p>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Item</th>
+                <th>Type</th>
+                <th>Qty</th>
+                <th>UOM</th>
+              </tr>
+            </thead>
+            <tbody id="movementDetailLines"></tbody>
+          </table>
+        </div>
+        <div style="margin-top:8px;">
+          <h4 style="margin:6px 0 4px;">History / Logs</h4>
+          <ul id="movementDetailLogs" class="log-list"></ul>
+        </div>
+      </div>
+      <div class="modal__footer">
+        <button class="btn btn-secondary" data-close-modal="modalMovementDetail">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Incoming Modal -->
+  <div id="modalIncoming" class="modal hidden">
+    <div class="modal__backdrop"></div>
+    <div class="modal__content">
+      <div class="modal__header">
+        <h3>New Incoming</h3>
+        <button class="modal__close" data-close-modal="modalIncoming">&times;</button>
+      </div>
+      <div class="modal__body">
+        <div class="form-grid">
+          <div class="form-group">
+            <label for="incomingDate">Date</label>
+            <input id="incomingDate" type="date" class="input" />
+          </div>
+          <div class="form-group">
+            <label for="incomingProperty">Property</label>
+            <input id="incomingProperty" class="input" />
+          </div>
+          <div class="form-group">
+            <label for="incomingSourceType">Source Type</label>
+            <select id="incomingSourceType" class="input">
+              <option value="WITH_PO">With PO</option>
+              <option value="WITHOUT_PO">Without PO</option>
+              <option value="ADJUSTMENT">Adjustment</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="incomingPONumber">PO Number</label>
+            <div class="po-search">
+              <input id="incomingPOSearch" class="input" placeholder="Search PO number" autocomplete="off" />
+              <input id="incomingPONumber" type="hidden" />
+              <div id="poDropdown" class="po-dropdown hidden">
+                <div id="poDropdownList" class="po-dropdown__list"></div>
+                <button type="button" id="poDropdownMore" class="po-dropdown__more hidden">Load more</button>
+              </div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="incomingNote">Note</label>
+            <input id="incomingNote" class="input" placeholder="Notes / remark" />
+          </div>
+          <div class="form-group form-group--full">
+            <label for="incomingBast">BAST Attachment (image or doc, required)</label>
+            <input id="incomingBast" type="file" class="input"
+              accept=".png,.jpg,.jpeg,.pdf,.doc,.docx,.xls,.xlsx,.csv" />
+            <p class="info-text">Attach signed BAST before posting incoming.</p>
+          </div>
+        </div>
+
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Item</th>
+                <th>UOM</th>
+                <th>Qty</th>
+              </tr>
+            </thead>
+            <tbody id="incomingLinesTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal__footer">
+        <div class="panel-actions" style="margin:0; width:100%;">
+          <button id="btnAddIncomingLine" class="btn btn-secondary btn-sm">Add Line</button>
+          <div style="flex:1"></div>
+          <button id="btnResetIncoming" class="btn btn-secondary btn-sm">Discard Changes</button>
+          <button id="btnPostIncoming" class="btn btn-primary">Post Incoming</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Outgoing Modal -->
+  <div id="modalOutgoing" class="modal hidden">
+    <div class="modal__backdrop"></div>
+    <div class="modal__content">
+      <div class="modal__header">
+        <h3>New Outgoing</h3>
+        <button class="modal__close" data-close-modal="modalOutgoing">&times;</button>
+      </div>
+      <div class="modal__body">
+        <div class="form-grid">
+          <div class="form-group">
+            <label for="outgoingDate">Date</label>
+            <input id="outgoingDate" type="date" class="input" />
+          </div>
+          <div class="form-group">
+            <label for="outgoingProperty">Property</label>
+            <input id="outgoingProperty" class="input" />
+          </div>
+          <div class="form-group">
+            <label for="outgoingDestType">Destination</label>
+            <select id="outgoingDestType" class="input">
+              <option value="DEPARTMENT">Department</option>
+              <option value="COMPLIMENTARY">Complimentary</option>
+              <option value="WASTAGE">Wastage</option>
+              <option value="ADJUSTMENT">Adjustment</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="outgoingDestRef">Destination Ref</label>
+            <input id="outgoingDestRef" class="input" placeholder="Housekeeping, Guest, etc." />
+          </div>
+          <div class="form-group">
+            <label for="outgoingNote">Note</label>
+            <input id="outgoingNote" class="input" placeholder="Notes / remark" />
+          </div>
+        </div>
+
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Item</th>
+                <th>UOM</th>
+                <th>Qty</th>
+              </tr>
+            </thead>
+            <tbody id="outgoingLinesTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal__footer">
+        <div class="panel-actions" style="margin:0; width:100%;">
+          <button id="btnAddOutgoingLine" class="btn btn-secondary btn-sm">Add Line</button>
+          <div style="flex:1"></div>
+          <button id="btnResetOutgoing" class="btn btn-secondary btn-sm">Discard Changes</button>
+          <button id="btnPostOutgoing" class="btn btn-primary">Post Outgoing</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Replenishment Modal -->
+  <div id="modalReplenishment" class="modal hidden">
+    <div class="modal__backdrop"></div>
+    <div class="modal__content" style="max-width:720px;">
+      <div class="modal__header">
+        <h3 id="replModalTitle">New Replenishment Request</h3>
+        <button class="modal__close" data-close-modal="modalReplenishment">&times;</button>
+      </div>
+      <div class="modal__body">
+        <div class="repl-section">
+          <div class="repl-section__header">
+            <h4>Request Details</h4>
+            <p>Who is making this request and when it is needed.</p>
+          </div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label for="replModalCreatedBy">Created By</label>
+              <input id="replModalCreatedBy" class="input" />
+            </div>
+            <div class="form-group">
+              <label for="replModalRequestDate">Request Date</label>
+              <input id="replModalRequestDate" type="date" class="input" />
+            </div>
+            <div class="form-group">
+              <label for="replModalDeliveryDate">Delivery Date</label>
+              <input id="replModalDeliveryDate" type="date" class="input" />
+            </div>
+            <div class="form-group">
+              <label for="replModalNeededDate">Needed Date</label>
+              <input id="replModalNeededDate" type="date" class="input" />
+            </div>
+          </div>
+        </div>
+
+        <div class="repl-section">
+          <div class="repl-section__header">
+            <h4>Approval Flow</h4>
+            <p>Track approvers and current status.</p>
+          </div>
+          <div class="approval-status">
+            <div id="replApprovalBadges" class="approval-badges"></div>
+          </div>
+        </div>
+
+        <div class="table-wrapper">
+          <div class="repl-line-section">
+            <div class="repl-line-section__header">
+              <h4>Add Line</h4>
+              <p>Add items to this request with the required details.</p>
+            </div>
+            <div class="repl-line-controls">
+              <label class="repl-line-field">
+                <span class="repl-line-label">Item</span>
+                <select id="replModalItemSelect" class="input"></select>
+              </label>
+              <label class="repl-line-field">
+                <span class="repl-line-label">Unit</span>
+                <input id="replModalUnit" class="input" placeholder="Unit" disabled />
+              </label>
+              <label class="repl-line-field">
+                <span class="repl-line-label">Quantity</span>
+                <input id="replModalQty" type="number" min="1" class="input" placeholder="Qty" />
+              </label>
+              <label class="repl-line-field">
+                <span class="repl-line-label">Department</span>
+                <select id="replModalDept" class="input">
+                  <option value="Housekeeping">Housekeeping</option>
+                  <option value="Front Office">Front Office</option>
+                  <option value="F&B">F&B</option>
+                  <option value="Engineering">Engineering</option>
+                </select>
+              </label>
+              <label class="repl-line-field">
+                <span class="repl-line-label">Last 7d Usage</span>
+                <input id="replModalUsage" class="input" placeholder="Auto" disabled />
+              </label>
+            </div>
+            <div class="repl-line-actions">
+              <button id="btnReplAddLine" class="btn btn-secondary btn-sm">Add Line</button>
+            </div>
+          </div>
+
+          <table class="repl-modal-table">
+            <thead>
+              <tr>
+                <th>Item</th>
+                <th>Unit</th>
+                <th>Quantity</th>
+                <th>Department</th>
+                <th>Last 7d Usage</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="replModalLinesBody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal__footer">
+        <div style="flex:1"></div>
+        <div class="repl-footer-actions">
+          <button id="btnReplSubmit" class="btn btn-secondary">Submit</button>
+          <button id="btnReplApprove" class="btn btn-secondary hidden">Approve</button>
+          <button id="btnReplReject" class="btn btn-secondary hidden">Reject</button>
+          <button id="btnReplDelete" class="btn btn-secondary hidden">Delete</button>
+          <button id="btnReplPrint" class="btn btn-secondary hidden">Print</button>
+          <button class="btn btn-secondary" data-close-modal="modalReplenishment">Cancel</button>
+          <button id="btnReplSave" class="btn btn-primary">Save as draft</button>
+        </div>
       </div>
     </div>
   </div>
