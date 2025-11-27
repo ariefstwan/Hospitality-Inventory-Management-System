@@ -12,6 +12,9 @@ const UOMS = [
   { code: 'ML', label: 'Milliliter (ML)' }
 ];
 const MOVEMENT_PAGE_SIZE = 5;
+const INCOMING_PAGE_SIZE = 5;
+const OUTGOING_PAGE_SIZE = 5;
+const TABLE_PAGE_SIZE = 5;
 const PO_PAGE_SIZE = 6;
 let PO_CATALOG = [];
 const DEPARTMENTS = ['Housekeeping','Front Office','F&B','Engineering'];
@@ -38,10 +41,21 @@ const ITEM_VENDOR_META = {
 
 const PROFILES = [
   { name: 'Arief Setiawan', role: 'Property PIC' },
-  { name: 'Zahran', role: 'Operational Manager' },
-  { name: 'Audy', role: 'Operation Lead' },
-  { name: 'Leon', role: 'Property Head' }
+  { name: 'Rasul Syuaib', role: 'Operation Manager' },
+  { name: 'Ahmad Reza', role: 'Property Lead' },
+  { name: 'Leon Yaphar', role: 'Property Head' }
 ];
+
+const PR_STATUS_META = {
+  DRAFT: { label: 'DRAFT', className: 'badge--draft', subtitle: 'Draft - editable by submitter' },
+  IN_REVIEW: { label: 'IN_REVIEW', className: 'badge--pending', subtitle: 'Waiting on approver actions' },
+  REJECTED: { label: 'REJECTED', className: 'badge--rejected', subtitle: 'Rejected by approver' },
+  WAITING_PO: { label: 'WAITING_PO', className: 'badge--waiting-po', subtitle: 'Approved in RedIMS, waiting for Procurement to issue PO' },
+  PO_ISSUED: { label: 'PO_ISSUED', className: 'badge--po-issued', subtitle: 'PO attached; waiting for goods receipt' },
+  WAITING_INVOICE: { label: 'WAITING_INVOICE', className: 'badge--waiting-invoice', subtitle: 'Goods received; waiting for invoice & Finance acknowledgement' },
+  CLOSED: { label: 'CLOSED', className: 'badge--closed', subtitle: 'Invoice captured, PR lifecycle closed' },
+  APPROVED: { label: 'APPROVED', className: 'badge--waiting-po', subtitle: 'Approved (legacy state)' }
+};
 
 const state = {
   activePage: 'room-inventory',
@@ -73,11 +87,22 @@ let currentReplEditingId = null;
 let poSearchQuery = '';
 let poSearchPage = 1;
 let replModalReadOnly = false;
+let replDetailViewOnly = false;
 let replItemSearchQuery = '';
 let replItemSearchBound = false;
 let replDeptSearchBound = false;
+let poFormVisible = false;
 let hasSeeded = false;
 let incomingModalReadOnly = false;
+let incomingPOLocked = false;
+let incomingPage = 1;
+let outgoingPage = 1;
+let roomPage = 1;
+let laundryPage = 1;
+let alertPage = 1;
+let opnamePage = 1;
+let replPage = 1;
+let stockOnHandPage = 1;
 
 function ensureSeeded(){
   if(hasSeeded) return;
@@ -128,6 +153,26 @@ function categoryForProcItem(name){
   return '';
 }
 function formatProcItemOption(p){ return `${p.code} - ${p.name}${p.vendor ? ' - ' + p.vendor : ''}`; }
+function ensureReplenishmentDefaults(req){
+  if(!req) return;
+  req.poList = Array.isArray(req.poList) ? req.poList : [];
+  if(req.invoice === undefined) req.invoice = null;
+  if(req.status === 'APPROVED') req.status = 'WAITING_PO';
+}
+function normalizeReplenishmentState(){
+  state.replenishmentRequests.forEach(ensureReplenishmentDefaults);
+}
+function getPRStatusMeta(status){
+  return PR_STATUS_META[status] || { label: status || '-', className: 'badge--archived', subtitle: '' };
+}
+function renderPRStatusBadge(status){
+  const meta = getPRStatusMeta(status);
+  return `<span class="badge ${meta.className}">${meta.label}</span>`;
+}
+function getPRStatusSubtitle(status){
+  const meta = getPRStatusMeta(status);
+  return meta.subtitle || '';
+}
 function getSelectedOptionVendor(sel){
   const opt = sel && sel.selectedOptions && sel.selectedOptions[0];
   return opt ? (opt.dataset.vendor || '') : '';
@@ -170,12 +215,16 @@ function bindProcSelectSearch(selectEl, searchEl, list){
   });
 }
 function bindSearchableSelect(selectEl, options){
-  if(!selectEl) return;
+  if(!selectEl || selectEl.dataset.searchSelectInit) return;
+  selectEl.dataset.searchSelectInit = '1';
+  const sorted = (options || []).slice().sort((a,b)=>a.label.localeCompare(b.label));
   const wrapper = document.createElement('div');
   wrapper.className = 'search-select';
   const input = document.createElement('input');
   input.className = 'input';
   input.placeholder = 'Search item...';
+  const selected = selectEl.selectedOptions && selectEl.selectedOptions[0];
+  if(selected) input.value = selected.textContent;
   const dropdown = document.createElement('div');
   dropdown.className = 'search-select__dropdown hidden';
   const list = document.createElement('div');
@@ -190,7 +239,7 @@ function bindSearchableSelect(selectEl, options){
   const render = (q='')=>{
     const qLower = q.toLowerCase();
     list.innerHTML = '';
-    options.filter(opt => opt.label.toLowerCase().includes(qLower)).forEach(opt=>{
+    sorted.filter(opt => opt.label.toLowerCase().includes(qLower)).forEach(opt=>{
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.textContent = opt.label;
@@ -206,15 +255,24 @@ function bindSearchableSelect(selectEl, options){
     dropdown.classList.toggle('hidden', !list.children.length);
   };
 
-  input.addEventListener('focus', ()=>render(input.value));
+  input.addEventListener('focus', ()=>render(''));
   input.addEventListener('input', ()=>render(input.value));
   document.addEventListener('click', (e)=>{
     if(wrapper.contains(e.target)) return;
     dropdown.classList.add('hidden');
   });
 
+  const syncDisabled = ()=>{
+    input.disabled = !!selectEl.disabled;
+    input.classList.toggle('is-disabled', !!selectEl.disabled);
+  };
+  syncDisabled();
+  input.addEventListener('focus', ()=>{ if(input.disabled) dropdown.classList.add('hidden'); });
+  input.addEventListener('input', ()=>{ if(input.disabled) dropdown.classList.add('hidden'); });
+
   render('');
 }
+
 function initUomSelect(selectId) {
   const sel = document.getElementById(selectId);
   if (!sel) return;
@@ -393,7 +451,7 @@ function seedDummyData() {
   state.stockOpnameLines[sid] = state.roomInventoryItems.map(i => ({ id: 'SL-' + i.id, itemId: i.id, itemName: i.name, type: 'ROOM', systemQty: i.onHand, countedQty: i.onHand, varianceQty: 0, notes: '' }));
 
   const rr = nextReplId();
-  state.replenishmentRequests.push({ id: rr, property: state.selectedProperty, requestorName: 'Arief Setiawan', requestorRole: 'Property PIC', createdAt: '2025-10-05', updatedAt: '2025-10-05', status: 'DRAFT', notes: 'Initial', approvals: buildApprovalChain(), items: [ { id: nextReplLineId(), itemId: state.roomInventoryItems[0].id, itemName: state.roomInventoryItems[0].name, type: 'ROOM', currentStock: state.roomInventoryItems[0].onHand, minStock: state.roomInventoryItems[0].minStock, last7DayUsage: 80, suggestedQty: 100, requestedQty: 100, department: 'Housekeeping', mandatory: state.roomInventoryItems[0].mandatory, notes: '' } ] });
+  state.replenishmentRequests.push({ id: rr, property: state.selectedProperty, requestorName: 'Arief Setiawan', requestorRole: 'Property PIC', createdAt: '2025-10-05', updatedAt: '2025-10-05', status: 'DRAFT', notes: 'Initial', approvals: buildApprovalChain(), poList: [], invoice: null, items: [ { id: nextReplLineId(), itemId: state.roomInventoryItems[0].id, itemName: state.roomInventoryItems[0].name, type: 'ROOM', currentStock: state.roomInventoryItems[0].onHand, minStock: state.roomInventoryItems[0].minStock, last7DayUsage: 80, suggestedQty: 100, requestedQty: 100, department: 'Housekeeping', mandatory: state.roomInventoryItems[0].mandatory, notes: '' } ] });
 
   PO_CATALOG = [
     {
@@ -423,6 +481,7 @@ function renderAll() {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('page--active'));
   const active = document.getElementById('page-' + state.activePage);
   if (active) active.classList.add('page--active');
+  normalizeReplenishmentState();
   [
     renderRoomInventoryTable,
     renderLaundryInventoryTable,
@@ -561,21 +620,63 @@ function renderHeaderUser(){
 }
 
 /* Room Inventory */
-function bindRoomInventory() { const btnAdd = document.getElementById('btnAddRoomItem'); if (btnAdd) btnAdd.addEventListener('click', () => openRoomItemModal(null)); const btnSave = document.getElementById('btnSaveRoomItem'); if (btnSave) btnSave.addEventListener('click', saveRoomItemFromModal); const search = document.getElementById('roomSearchInput'); if (search) search.addEventListener('input', renderRoomInventoryTable); const cat = document.getElementById('roomCategoryFilter'); if (cat) cat.addEventListener('change', renderRoomInventoryTable); const status = document.getElementById('roomStatusFilter'); if (status) status.addEventListener('change', renderRoomInventoryTable); const nameSel = document.getElementById('roomItemName'); const nameCustom = document.getElementById('roomItemNameCustom'); if(nameSel){ nameSel.addEventListener('change', ()=>{ const proc = findProcItem(nameSel.value); const catInput = document.getElementById('roomItemCategory'); if(proc && catInput && proc.category) catInput.value = proc.category; }); } if(nameCustom){ nameCustom.addEventListener('input', ()=>{ const catInput = document.getElementById('roomItemCategory'); if(catInput) catInput.value = catInput.value; }); } }
+function bindRoomInventory() { const btnAdd = document.getElementById('btnAddRoomItem'); if (btnAdd) btnAdd.addEventListener('click', () => openRoomItemModal(null)); const btnSave = document.getElementById('btnSaveRoomItem'); if (btnSave) btnSave.addEventListener('click', saveRoomItemFromModal); const search = document.getElementById('roomSearchInput'); if (search) search.addEventListener('input', ()=>{ roomPage=1; renderRoomInventoryTable(); }); const cat = document.getElementById('roomCategoryFilter'); if (cat) cat.addEventListener('change', ()=>{ roomPage=1; renderRoomInventoryTable(); }); const status = document.getElementById('roomStatusFilter'); if (status) status.addEventListener('change', ()=>{ roomPage=1; renderRoomInventoryTable(); }); const prev = document.getElementById('roomInvPrev'); if(prev) prev.addEventListener('click', ()=>{ roomPage=Math.max(1,roomPage-1); renderRoomInventoryTable(); }); const next = document.getElementById('roomInvNext'); if(next) next.addEventListener('click', ()=>{ roomPage=roomPage+1; renderRoomInventoryTable(); }); const nameSel = document.getElementById('roomItemName'); const nameCustom = document.getElementById('roomItemNameCustom'); if(nameSel){ nameSel.addEventListener('change', ()=>{ const proc = findProcItem(nameSel.value); const catInput = document.getElementById('roomItemCategory'); if(proc && catInput && proc.category) catInput.value = proc.category; }); } if(nameCustom){ nameCustom.addEventListener('input', ()=>{ const catInput = document.getElementById('roomItemCategory'); if(catInput) catInput.value = catInput.value; }); } }
 
-function renderRoomInventoryTable() { ensureSeeded(); const tbody = document.getElementById('roomInventoryTableBody'); if (!tbody) return; tbody.innerHTML = ''; const searchVal = ((document.getElementById('roomSearchInput') || {}).value || '').toLowerCase(); const catRaw = (document.getElementById('roomCategoryFilter') || {}).value || 'all'; const statusRaw = (document.getElementById('roomStatusFilter') || {}).value || 'all'; const catFilter = ['all','All Categories'].includes(catRaw) ? 'all' : catRaw; const statusFilter = ['all','All Status'].includes(statusRaw) ? 'all' : statusRaw; state.roomInventoryItems.filter(item => { if (searchVal && !item.name.toLowerCase().includes(searchVal)) return false; if (catFilter !== 'all' && item.category !== catFilter) return false; if (statusFilter !== 'all' && item.status !== statusFilter) return false; return true; }).forEach(item => { const tr = document.createElement('tr'); tr.innerHTML = `
-    <td>${item.name}</td>
-    <td>${item.vendor || '-'}</td>
-    <td>${item.category}</td>
-    <td>${getUomLabel(item.unit)}</td>
-    <td><span class="badge ${item.mandatory ? 'badge--yes' : 'badge--no'}">${item.mandatory ? 'Yes' : 'No'}</span></td>
-    <td>${item.parPerRoom ?? 0}</td>
-    <td>${item.minStock}</td>
-    <td>${item.maxStock ?? '-'}</td>
-    <td>${item.onHand}</td>
-    <td><span class="badge ${item.status === 'ACTIVE' ? 'badge--active' : 'badge--archived'}">${item.status}</span></td>
-    <td class="table-actions-col"><button class="btn btn-secondary btn-sm" data-action="edit">Edit</button> <button class="btn btn-secondary btn-sm" data-action="adjust">Adjust</button> <button class="btn btn-secondary btn-sm" data-action="archive">Archive</button></td>
-  `; tr.querySelectorAll('button').forEach(btn => btn.addEventListener('click', () => { const action = btn.getAttribute('data-action'); if (action === 'edit') openRoomItemModal(item.id); if (action === 'adjust') openAdjustStockModal(item.id, 'ROOM'); if (action === 'archive') { item.status = 'ARCHIVED'; showToast('Room item archived'); renderAll(); } })); tbody.appendChild(tr); }); }
+function renderRoomInventoryTable() {
+  ensureSeeded();
+  const tbody = document.getElementById('roomInventoryTableBody');
+  if (!tbody) return;
+  const searchVal = ((document.getElementById('roomSearchInput') || {}).value || '').toLowerCase();
+  const catRaw = (document.getElementById('roomCategoryFilter') || {}).value || 'all';
+  const statusRaw = (document.getElementById('roomStatusFilter') || {}).value || 'all';
+  const catFilter = ['all','All Categories'].includes(catRaw) ? 'all' : catRaw;
+  const statusFilter = ['all','All Status'].includes(statusRaw) ? 'all' : statusRaw;
+
+  const filtered = state.roomInventoryItems.filter(item => {
+    if (searchVal && !item.name.toLowerCase().includes(searchVal)) return false;
+    if (catFilter !== 'all' && item.category !== catFilter) return false;
+    if (statusFilter !== 'all' && item.status !== statusFilter) return false;
+    return true;
+  });
+
+  const totalPages = Math.max(1, Math.ceil(Math.max(filtered.length,1) / TABLE_PAGE_SIZE));
+  roomPage = Math.min(roomPage, totalPages);
+  const slice = filtered.slice((roomPage-1)*TABLE_PAGE_SIZE, roomPage*TABLE_PAGE_SIZE);
+
+  tbody.innerHTML = '';
+  if(!slice.length){
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td colspan="11" style="text-align:center; color: var(--color-text-muted);">No room items</td>`;
+    tbody.appendChild(tr);
+  } else {
+    slice.forEach(item => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${item.name}</td>
+        <td>${item.vendor || '-'}</td>
+        <td>${item.category}</td>
+        <td>${getUomLabel(item.unit)}</td>
+        <td><span class="badge ${item.mandatory ? 'badge--yes' : 'badge--no'}">${item.mandatory ? 'Yes' : 'No'}</span></td>
+        <td>${item.parPerRoom ?? 0}</td>
+        <td>${item.minStock}</td>
+        <td>${item.maxStock ?? '-'}</td>
+        <td>${item.onHand}</td>
+        <td><span class="badge ${item.status === 'ACTIVE' ? 'badge--active' : 'badge--archived'}">${item.status}</span></td>
+        <td class="table-actions-col"><button class="btn btn-secondary btn-sm" data-action="edit">Edit</button> <button class="btn btn-secondary btn-sm" data-action="adjust">Adjust</button> <button class="btn btn-secondary btn-sm" data-action="archive">Archive</button></td>
+      `;
+      tr.querySelectorAll('button').forEach(btn => btn.addEventListener('click', () => {
+        const action = btn.getAttribute('data-action');
+        if (action === 'edit') openRoomItemModal(item.id);
+        if (action === 'adjust') openAdjustStockModal(item.id, 'ROOM');
+        if (action === 'archive') { item.status = 'ARCHIVED'; showToast('Room item archived'); renderAll(); }
+      }));
+      tbody.appendChild(tr);
+    });
+  }
+  const info = document.getElementById('roomInvPageInfo'); if(info) info.textContent = `Page ${roomPage} / ${totalPages}`;
+  const prev = document.getElementById('roomInvPrev'); if(prev) prev.disabled = roomPage <= 1;
+  const next = document.getElementById('roomInvNext'); if(next) next.disabled = roomPage >= totalPages;
+}
 
 function openRoomItemModal(id) { const modal = document.getElementById('modalRoomItem'); if (!modal) return; const title = document.getElementById('modalRoomTitle'); const form = document.getElementById('roomItemForm'); if (form) form.reset(); document.getElementById('roomItemId').value = id || ''; ensureProcurementOptions([document.getElementById('roomItemName')]); const onHandInfo = document.getElementById('roomOnHandInfo'); const customInput = document.getElementById('roomItemNameCustom'); if (id) { title.textContent = 'Edit Room Item'; const item = state.roomInventoryItems.find(i => i.id === id); if (!item) return; const proc = findProcItem(item.name); const nameSel = document.getElementById('roomItemName'); if(nameSel) nameSel.value = proc ? proc.name : ''; if(customInput) customInput.value = proc ? '' : item.name; document.getElementById('roomItemCategory').value = item.category; document.getElementById('roomItemUnit').value = item.unit || 'PCS'; document.getElementById('roomItemMandatory').checked = !!item.mandatory; document.getElementById('roomParPerRoom').value = item.parPerRoom ?? 0; document.getElementById('roomMinStock').value = item.minStock ?? 0; document.getElementById('roomMaxStock').value = item.maxStock ?? ''; if (onHandInfo) onHandInfo.textContent = `Current On Hand: ${item.onHand ?? 0}`; } else { title.textContent = 'Add Room Item'; if (onHandInfo) onHandInfo.textContent = 'Current On Hand: 0'; document.getElementById('roomItemUnit').value = 'PCS'; const nameSel = document.getElementById('roomItemName'); if(nameSel) nameSel.value = ''; if(customInput) customInput.value = ''; } openModal('modalRoomItem'); }
 
@@ -625,9 +726,38 @@ function saveRoomItemFromModal() {
 }
 
 /* Laundry Inventory */
-function bindLaundryInventory() { const btnAdd = document.getElementById('btnAddLaundryItem'); if (btnAdd) btnAdd.addEventListener('click', () => openLaundryItemModal(null)); const btnSave = document.getElementById('btnSaveLaundryItem'); if (btnSave) btnSave.addEventListener('click', saveLaundryItemFromModal); const search = document.getElementById('laundrySearchInput'); if (search) search.addEventListener('input', renderLaundryInventoryTable); const cat = document.getElementById('laundryCategoryFilter'); if (cat) cat.addEventListener('change', renderLaundryInventoryTable); const status = document.getElementById('laundryStatusFilter'); if (status) status.addEventListener('change', renderLaundryInventoryTable); const nameSel = document.getElementById('laundryItemName'); const nameCustom = document.getElementById('laundryItemNameCustom'); if(nameSel){ nameSel.addEventListener('change', ()=>{ const proc = findProcItem(nameSel.value); const catInput = document.getElementById('laundryItemCategory'); if(proc && catInput && proc.category) catInput.value = proc.category; }); } if(nameCustom){ nameCustom.addEventListener('input', ()=>{ const catInput = document.getElementById('laundryItemCategory'); if(catInput) catInput.value = catInput.value; }); } }
+function bindLaundryInventory() { const btnAdd = document.getElementById('btnAddLaundryItem'); if (btnAdd) btnAdd.addEventListener('click', () => openLaundryItemModal(null)); const btnSave = document.getElementById('btnSaveLaundryItem'); if (btnSave) btnSave.addEventListener('click', saveLaundryItemFromModal); const search = document.getElementById('laundrySearchInput'); if (search) search.addEventListener('input', ()=>{ laundryPage=1; renderLaundryInventoryTable(); }); const cat = document.getElementById('laundryCategoryFilter'); if (cat) cat.addEventListener('change', ()=>{ laundryPage=1; renderLaundryInventoryTable(); }); const status = document.getElementById('laundryStatusFilter'); if (status) status.addEventListener('change', ()=>{ laundryPage=1; renderLaundryInventoryTable(); }); const prev = document.getElementById('laundryInvPrev'); if(prev) prev.addEventListener('click', ()=>{ laundryPage=Math.max(1,laundryPage-1); renderLaundryInventoryTable(); }); const next = document.getElementById('laundryInvNext'); if(next) next.addEventListener('click', ()=>{ laundryPage=laundryPage+1; renderLaundryInventoryTable(); }); const nameSel = document.getElementById('laundryItemName'); const nameCustom = document.getElementById('laundryItemNameCustom'); if(nameSel){ nameSel.addEventListener('change', ()=>{ const proc = findProcItem(nameSel.value); const catInput = document.getElementById('laundryItemCategory'); if(proc && catInput && proc.category) catInput.value = proc.category; }); } if(nameCustom){ nameCustom.addEventListener('input', ()=>{ const catInput = document.getElementById('laundryItemCategory'); if(catInput) catInput.value = catInput.value; }); } }
 
-function renderLaundryInventoryTable() { ensureSeeded(); const tbody = document.getElementById('laundryInventoryTableBody'); if (!tbody) return; tbody.innerHTML = ''; const searchVal = ((document.getElementById('laundrySearchInput') || {}).value || '').toLowerCase(); const catRaw = (document.getElementById('laundryCategoryFilter') || {}).value || 'all'; const statusRaw = (document.getElementById('laundryStatusFilter') || {}).value || 'all'; const catFilter = ['all','All Categories'].includes(catRaw) ? 'all' : catRaw; const statusFilter = ['all','All Status'].includes(statusRaw) ? 'all' : statusRaw; state.laundryInventoryItems.filter(item => { if (searchVal && !item.name.toLowerCase().includes(searchVal)) return false; if (catFilter !== 'all' && item.category !== catFilter) return false; if (statusFilter !== 'all' && item.status !== statusFilter) return false; return true; }).forEach(item => { const tr = document.createElement('tr'); tr.innerHTML = `
+function renderLaundryInventoryTable() {
+  ensureSeeded();
+  const tbody = document.getElementById('laundryInventoryTableBody');
+  if (!tbody) return;
+  const searchVal = ((document.getElementById('laundrySearchInput') || {}).value || '').toLowerCase();
+  const catRaw = (document.getElementById('laundryCategoryFilter') || {}).value || 'all';
+  const statusRaw = (document.getElementById('laundryStatusFilter') || {}).value || 'all';
+  const catFilter = ['all','All Categories'].includes(catRaw) ? 'all' : catRaw;
+  const statusFilter = ['all','All Status'].includes(statusRaw) ? 'all' : statusRaw;
+
+  const filtered = state.laundryInventoryItems.filter(item => {
+    if (searchVal && !item.name.toLowerCase().includes(searchVal)) return false;
+    if (catFilter !== 'all' && item.category !== catFilter) return false;
+    if (statusFilter !== 'all' && item.status !== statusFilter) return false;
+    return true;
+  });
+
+  const totalPages = Math.max(1, Math.ceil(Math.max(filtered.length,1) / TABLE_PAGE_SIZE));
+  laundryPage = Math.min(laundryPage, totalPages);
+  const slice = filtered.slice((laundryPage-1)*TABLE_PAGE_SIZE, laundryPage*TABLE_PAGE_SIZE);
+
+  tbody.innerHTML = '';
+  if(!slice.length){
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td colspan="11" style="text-align:center; color: var(--color-text-muted);">No laundry items</td>`;
+    tbody.appendChild(tr);
+  } else {
+    slice.forEach(item => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
     <td>${item.name}</td>
     <td>${item.vendor || '-'}</td>
     <td>${item.category}</td>
@@ -639,7 +769,20 @@ function renderLaundryInventoryTable() { ensureSeeded(); const tbody = document.
     <td><span class="badge ${item.mandatory ? 'badge--yes' : 'badge--no'}">${item.mandatory ? 'Yes' : 'No'}</span></td>
     <td><span class="badge ${item.status === 'ACTIVE' ? 'badge--active' : 'badge--archived'}">${item.status}</span></td>
     <td class="table-actions-col"><button class="btn btn-secondary btn-sm" data-action="edit">Edit</button> <button class="btn btn-secondary btn-sm" data-action="adjust">Adjust</button> <button class="btn btn-secondary btn-sm" data-action="archive">Archive</button></td>
-  `; tr.querySelectorAll('button').forEach(btn => btn.addEventListener('click', () => { const action = btn.getAttribute('data-action'); if (action === 'edit') openLaundryItemModal(item.id); if (action === 'adjust') openAdjustStockModal(item.id, 'LAUNDRY'); if (action === 'archive') { item.status = 'ARCHIVED'; showToast('Laundry item archived'); renderAll(); } })); tbody.appendChild(tr); }); }
+  `;
+      tr.querySelectorAll('button').forEach(btn => btn.addEventListener('click', () => {
+        const action = btn.getAttribute('data-action');
+        if (action === 'edit') openLaundryItemModal(item.id);
+        if (action === 'adjust') openAdjustStockModal(item.id, 'LAUNDRY');
+        if (action === 'archive') { item.status = 'ARCHIVED'; showToast('Laundry item archived'); renderAll(); }
+      }));
+      tbody.appendChild(tr);
+    });
+  }
+  const info = document.getElementById('laundryInvPageInfo'); if(info) info.textContent = `Page ${laundryPage} / ${totalPages}`;
+  const prev = document.getElementById('laundryInvPrev'); if(prev) prev.disabled = laundryPage <= 1;
+  const next = document.getElementById('laundryInvNext'); if(next) next.disabled = laundryPage >= totalPages;
+}
 
 function openLaundryItemModal(id) { const modal = document.getElementById('modalLaundryItem'); if (!modal) return; const title = document.getElementById('modalLaundryTitle'); const form = document.getElementById('laundryItemForm'); if (form) form.reset(); document.getElementById('laundryItemId').value = id || ''; ensureProcurementOptions([document.getElementById('laundryItemName')]); const onHandInfo = document.getElementById('laundryOnHandInfo'); const customInput = document.getElementById('laundryItemNameCustom'); if (id) { title.textContent = 'Edit Laundry Item'; const it = state.laundryInventoryItems.find(x => x.id === id); if (!it) return; const proc = findProcItem(it.name); const nameSel = document.getElementById('laundryItemName'); if(nameSel) nameSel.value = proc ? proc.name : ''; if(customInput) customInput.value = proc ? '' : it.name; document.getElementById('laundryItemCategory').value = it.category; document.getElementById('laundryItemSize').value = it.size || ''; document.getElementById('laundryItemUnit').value = it.unit || 'PCS'; document.getElementById('laundryItemMandatory').checked = !!it.mandatory; document.getElementById('laundryParPerRoom').value = it.parPerRoom ?? 0; document.getElementById('laundryMinStock').value = it.minStock ?? 0; if (onHandInfo) onHandInfo.textContent = `Current On Hand: ${it.onHand ?? 0}`; } else { title.textContent = 'Add Laundry Item'; if (onHandInfo) onHandInfo.textContent = 'Current On Hand: 0'; document.getElementById('laundryItemUnit').value = 'PCS'; const nameSel = document.getElementById('laundryItemName'); if(nameSel) nameSel.value = ''; if(customInput) customInput.value = ''; } openModal('modalLaundryItem'); }
 
@@ -681,7 +824,13 @@ function saveLaundryItemFromModal() {
 }
 
 /* Stock Alert */
-function bindStockAlert() { const filter = document.getElementById('alertStatusFilter'); if (filter) filter.addEventListener('change', renderStockAlertTable); const selectAll = document.getElementById('selectAllAlerts'); if (selectAll) selectAll.addEventListener('change', handleSelectAllAlerts); const btnCreate = document.getElementById('btnCreateReplenishmentFromAlert'); if (btnCreate) btnCreate.addEventListener('click', createReplenishmentFromAlerts); }
+function bindStockAlert() {
+  const filter = document.getElementById('alertStatusFilter'); if (filter) filter.addEventListener('change', ()=>{ alertPage=1; renderStockAlertTable(); });
+  const selectAll = document.getElementById('selectAllAlerts'); if (selectAll) selectAll.addEventListener('change', handleSelectAllAlerts);
+  const btnCreate = document.getElementById('btnCreateReplenishmentFromAlert'); if (btnCreate) btnCreate.addEventListener('click', createReplenishmentFromAlerts);
+  const prev = document.getElementById('stockAlertPrev'); if(prev) prev.addEventListener('click', ()=>{ alertPage = Math.max(1, alertPage-1); renderStockAlertTable(); });
+  const next = document.getElementById('stockAlertNext'); if(next) next.addEventListener('click', ()=>{ alertPage = alertPage+1; renderStockAlertTable(); });
+}
 
 function buildStockAlertItems() {
   const out = [];
@@ -725,35 +874,47 @@ function renderStockAlertTable() {
   if (!tbody) return;
   tbody.innerHTML = '';
   const filter = (document.getElementById('alertStatusFilter') || {}).value || 'all';
-  const rows = buildStockAlertItems().filter(r => filter === 'all' ? true : r.status === filter);
-  rows.forEach(r => {
+  const allRows = buildStockAlertItems().filter(r => filter === 'all' ? true : r.status === filter);
+  const totalPages = Math.max(1, Math.ceil(Math.max(allRows.length,1) / TABLE_PAGE_SIZE));
+  alertPage = Math.min(alertPage, totalPages);
+  const slice = allRows.slice((alertPage-1)*TABLE_PAGE_SIZE, alertPage*TABLE_PAGE_SIZE);
+  if(!slice.length){
     const tr = document.createElement('tr');
-    tr.innerHTML = `
-    <td><input type="checkbox" class="alert-select" data-id="${r.id}" data-type="${r.type}"></td>
-    <td>${r.name}</td>
-    <td>${r.type}</td>
-    <td>${r.onHand}</td>
-    <td>${r.minStock}</td>
-    <td><span class="badge ${r.status === 'critical' ? 'badge--critical' : 'badge--below'}">${r.status === 'critical' ? 'Critical' : 'Below Min'}</span></td>
-    <td><span class="badge ${r.mandatory ? 'badge--yes' : 'badge--no'}">${r.mandatory ? 'Yes' : 'No'}</span></td>
-    <td>${r.suggestedQty}</td>
-    <td>${r.last7DayUsage}</td>
-  `;
+    tr.innerHTML = `<td colspan="9" style="text-align:center; color: var(--color-text-muted);">No alerts</td>`;
     tbody.appendChild(tr);
-  });
+  } else {
+    slice.forEach(r => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+      <td><input type="checkbox" class="alert-select" data-id="${r.id}" data-type="${r.type}"></td>
+      <td>${r.name}</td>
+      <td>${r.type}</td>
+      <td>${r.onHand}</td>
+      <td>${r.minStock}</td>
+      <td><span class="badge ${r.status === 'critical' ? 'badge--critical' : 'badge--below'}">${r.status === 'critical' ? 'Critical' : 'Below Min'}</span></td>
+      <td><span class="badge ${r.mandatory ? 'badge--yes' : 'badge--no'}">${r.mandatory ? 'Yes' : 'No'}</span></td>
+      <td>${r.suggestedQty}</td>
+      <td>${r.last7DayUsage}</td>
+    `;
+      tbody.appendChild(tr);
+    });
+  }
 
   // Disable select-all when no rows
   const sa = document.getElementById('selectAllAlerts');
-  if (sa) sa.disabled = rows.length === 0;
+  if (sa) sa.disabled = slice.length === 0;
 
   document.querySelectorAll('.alert-select').forEach(cb => cb.addEventListener('change', updateAlertSelectionState));
   updateAlertSelectionState();
+  const info = document.getElementById('stockAlertPageInfo'); if(info) info.textContent = `Page ${alertPage} / ${totalPages}`;
+  const prev = document.getElementById('stockAlertPrev'); if(prev) prev.disabled = alertPage <= 1;
+  const next = document.getElementById('stockAlertNext'); if(next) next.disabled = alertPage >= totalPages;
 }
 
 function handleSelectAllAlerts(e) { const checked = !!e.target.checked; document.querySelectorAll('.alert-select').forEach(cb=>cb.checked = checked); updateAlertSelectionState(); }
 function updateAlertSelectionState() { const any = Array.from(document.querySelectorAll('.alert-select')).some(cb => cb.checked); const btn = document.getElementById('btnCreateReplenishmentFromAlert'); if (btn) btn.disabled = !any; const all = document.querySelectorAll('.alert-select'); const allChecked = all.length && Array.from(all).every(cb=>cb.checked); const sa = document.getElementById('selectAllAlerts'); if (sa) sa.checked = !!allChecked; }
 
-function createReplenishmentFromAlerts() { const selected = Array.from(document.querySelectorAll('.alert-select')).filter(cb=>cb.checked).map(cb=>({ id: cb.dataset.id, type: cb.dataset.type })); if (!selected.length) return showToast('No alerts selected'); const all = buildStockAlertItems(); const lines = selected.map(s => { const a = all.find(x=>x.id===s.id && x.type===s.type); if (!a) return null; return { id: nextReplLineId(), itemId: a.id, itemName: a.name, type: a.type, currentStock: a.onHand, minStock: a.minStock, last7DayUsage: a.last7DayUsage, suggestedQty: a.suggestedQty, requestedQty: a.suggestedQty, mandatory: a.mandatory, notes: '' }; }).filter(Boolean); if (!lines.length) return showToast('No valid alert items'); const id = nextReplId(); const today = new Date().toISOString().slice(0,10); const req = { id, property: state.selectedProperty, requestorName: state.currentUser.name, requestorRole: state.currentUser.role, createdAt: today, updatedAt: today, status: 'DRAFT', notes:'', approvals: buildApprovalChain(), items: lines }; state.replenishmentRequests.push(req); state.activePage = 'replenishment-requests'; document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.getAttribute('data-page') === 'replenishment-requests')); renderAll(); openReplenishmentModal(req.id); showToast('Replenishment created from Stock Alert'); }
+function createReplenishmentFromAlerts() { const selected = Array.from(document.querySelectorAll('.alert-select')).filter(cb=>cb.checked).map(cb=>({ id: cb.dataset.id, type: cb.dataset.type })); if (!selected.length) return showToast('No alerts selected'); const all = buildStockAlertItems(); const lines = selected.map(s => { const a = all.find(x=>x.id===s.id && x.type===s.type); if (!a) return null; return { id: nextReplLineId(), itemId: a.id, itemName: a.name, type: a.type, currentStock: a.onHand, minStock: a.minStock, last7DayUsage: a.last7DayUsage, suggestedQty: a.suggestedQty, requestedQty: a.suggestedQty, mandatory: a.mandatory, notes: '' }; }).filter(Boolean); if (!lines.length) return showToast('No valid alert items'); const id = nextReplId(); const today = new Date().toISOString().slice(0,10); const req = { id, property: state.selectedProperty, requestorName: state.currentUser.name, requestorRole: state.currentUser.role, createdAt: today, updatedAt: today, status: 'DRAFT', notes:'', approvals: buildApprovalChain(), poList: [], invoice: null, items: lines }; state.replenishmentRequests.push(req); state.activePage = 'replenishment-requests'; document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.getAttribute('data-page') === 'replenishment-requests')); renderAll(); openReplenishmentModal(req.id); showToast('Replenishment created from Stock Alert'); }
 
 function updateStockAlertNavIndicator(){
   const btn = document.querySelector('.nav-item[data-page="stock-alert"]');
@@ -764,9 +925,23 @@ function updateStockAlertNavIndicator(){
 }
 
 /* Stock Opname */
-function bindStockOpname() { const btnNew = document.getElementById('btnNewStockOpname'); if (btnNew) btnNew.addEventListener('click', ()=>openModal('modalStockOpname')); const btnCreate = document.getElementById('btnCreateStockOpname'); if (btnCreate) btnCreate.addEventListener('click', createStockOpnameSession); const btnSubmit = document.getElementById('btnSubmitOpname'); if (btnSubmit) btnSubmit.addEventListener('click', submitStockOpname); const btnApprove = document.getElementById('btnApproveOpname'); if (btnApprove) btnApprove.addEventListener('click', approveStockOpname); }
+function bindStockOpname() { const btnNew = document.getElementById('btnNewStockOpname'); if (btnNew) btnNew.addEventListener('click', ()=>openModal('modalStockOpname')); const btnCreate = document.getElementById('btnCreateStockOpname'); if (btnCreate) btnCreate.addEventListener('click', createStockOpnameSession); const btnSubmit = document.getElementById('btnSubmitOpname'); if (btnSubmit) btnSubmit.addEventListener('click', submitStockOpname); const btnApprove = document.getElementById('btnApproveOpname'); if (btnApprove) btnApprove.addEventListener('click', approveStockOpname); const prev = document.getElementById('stockOpnamePrev'); if(prev) prev.addEventListener('click', ()=>{ opnamePage = Math.max(1, opnamePage-1); renderStockOpnameList(); }); const next = document.getElementById('stockOpnameNext'); if(next) next.addEventListener('click', ()=>{ opnamePage = opnamePage+1; renderStockOpnameList(); }); }
 
-function renderStockOpnameList() { const tbody = document.getElementById('stockOpnameTableBody'); if (!tbody) return; tbody.innerHTML = ''; state.stockOpnameSessions.forEach(s => { if(s.status === 'IN_PROGRESS' && s.createdBy !== state.currentUser.name) return; const tr = document.createElement('tr'); tr.innerHTML = `
+function renderStockOpnameList() {
+  const tbody = document.getElementById('stockOpnameTableBody'); if (!tbody) return;
+  const rows = state.stockOpnameSessions.filter(s => !(s.status === 'IN_PROGRESS' && s.createdBy !== state.currentUser.name));
+  const totalPages = Math.max(1, Math.ceil(Math.max(rows.length,1) / TABLE_PAGE_SIZE));
+  opnamePage = Math.min(opnamePage, totalPages);
+  const slice = rows.slice((opnamePage-1)*TABLE_PAGE_SIZE, opnamePage*TABLE_PAGE_SIZE);
+  tbody.innerHTML = '';
+  if(!slice.length){
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td colspan="9" style="text-align:center; color: var(--color-text-muted);">No stock opname sessions</td>`;
+    tbody.appendChild(tr);
+  } else {
+    slice.forEach(s => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
     <td>${s.id}</td>
     <td>${s.name}</td>
     <td>${s.coverage}</td>
@@ -776,7 +951,15 @@ function renderStockOpnameList() { const tbody = document.getElementById('stockO
     <td>${s.approvedBy || '-'}</td>
     <td>${s.updatedAt || s.createdAt}</td>
     <td class="table-actions-col"><button class="btn btn-secondary btn-sm" data-id="${s.id}">View</button></td>
-  `; tr.querySelector('button').addEventListener('click', ()=>openStockOpnameDetail(s.id)); tbody.appendChild(tr); }); }
+  `;
+      tr.querySelector('button').addEventListener('click', ()=>openStockOpnameDetail(s.id));
+      tbody.appendChild(tr);
+    });
+  }
+  const info = document.getElementById('stockOpnamePageInfo'); if(info) info.textContent = `Page ${opnamePage} / ${totalPages}`;
+  const prev = document.getElementById('stockOpnamePrev'); if(prev) prev.disabled = opnamePage <= 1;
+  const next = document.getElementById('stockOpnameNext'); if(next) next.disabled = opnamePage >= totalPages;
+}
 
 function createStockOpnameSession() {
   const name = ((document.getElementById('opnameNameInput') || {}).value || '').trim();
@@ -946,6 +1129,8 @@ function bindReplenishment(){
     e.preventDefault();
     openPreviewModal(href);
   });
+  const prev = document.getElementById('replPrev'); if(prev) prev.addEventListener('click', ()=>{ replPage = Math.max(1, replPage-1); renderReplenishmentList(); });
+  const next = document.getElementById('replNext'); if(next) next.addEventListener('click', ()=>{ replPage = replPage+1; renderReplenishmentList(); });
 }
 
 function updateNewReplenishmentButton(){
@@ -957,43 +1142,62 @@ function updateNewReplenishmentButton(){
 function renderReplenishmentList(){
   const tbody = document.getElementById('replenishmentTableBody');
   if(!tbody) return;
+  normalizeReplenishmentState();
+  const rows = state.replenishmentRequests.filter(req => req.status !== 'DRAFT' || req.requestorName === state.currentUser.name);
+  const totalPages = Math.max(1, Math.ceil(Math.max(rows.length,1) / TABLE_PAGE_SIZE));
+  replPage = Math.min(replPage, totalPages);
+  const slice = rows.slice((replPage-1)*TABLE_PAGE_SIZE, replPage*TABLE_PAGE_SIZE);
   tbody.innerHTML='';
-  state.replenishmentRequests
-    .filter(req => req.status !== 'DRAFT' || req.requestorName === state.currentUser.name)
-    .forEach(req=>{
-    const canEdit = req.status === 'DRAFT' && req.requestorName === state.currentUser.name && isCurrentUserPropertyPIC();
+  if(!slice.length){
     const tr = document.createElement('tr');
-    tr.innerHTML = `
+    tr.innerHTML = `<td colspan="8" style="text-align:center; color: var(--color-text-muted);">No purchase requests</td>`;
+    tbody.appendChild(tr);
+  } else {
+    slice.forEach(req=>{
+      const canEdit = req.status === 'DRAFT' && req.requestorName === state.currentUser.name && isCurrentUserPropertyPIC();
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
    <td>${req.id}</td>
    <td>${req.property}</td>
    <td>${req.requestorName}</td>
    <td>${req.items.length}</td>
-    <td>${req.status}</td>
-    <td>${req.createdAt}</td>
-    <td>${req.updatedAt}</td>
+    <td>${renderPRStatusBadge(req.status)}</td>
+    <td>${req.createdAt || '-'}</td>
+    <td>${req.updatedAt || '-'}</td>
     <td class="table-actions-col">
       <button class="btn btn-secondary btn-sm" data-action="view" data-id="${req.id}">View</button>
       ${canEdit ? `<button class="btn btn-secondary btn-sm" data-action="edit" data-id="${req.id}">Edit</button>` : ''}
       <button class="btn btn-secondary btn-sm" data-action="print" data-id="${req.id}">Print</button>
     </td>
   `;
-    tr.querySelectorAll('button').forEach(btn => btn.addEventListener('click', ()=>{
-      const action = btn.dataset.action;
-      if(action === 'view') openReplenishmentModal(req.id, { readOnly: true });
-      if(action === 'edit') openReplenishmentModal(req.id, { readOnly: false });
-      if(action === 'print') printReplenishment(req.id);
-    }));
-    tbody.appendChild(tr);
-  });
+      tr.querySelectorAll('button').forEach(btn => btn.addEventListener('click', ()=>{
+        const action = btn.dataset.action;
+        if(action === 'view') openReplenishmentModal(req.id, { readOnly: req.status === 'CLOSED' });
+        if(action === 'edit') openReplenishmentModal(req.id, { readOnly: false });
+        if(action === 'print') printReplenishment(req.id);
+      }));
+      tbody.appendChild(tr);
+    });
+  }
+  const info = document.getElementById('replPageInfo'); if(info) info.textContent = `Page ${replPage} / ${totalPages}`;
+  const prev = document.getElementById('replPrev'); if(prev) prev.disabled = replPage <= 1;
+  const next = document.getElementById('replNext'); if(next) next.disabled = replPage >= totalPages;
 }
 function openReplenishmentDetail(id) {
   const req = state.replenishmentRequests.find(r => r.id === id);
   if (!req) return;
+  ensureReplenishmentDefaults(req);
+  replModalReadOnly = false;
+  replDetailViewOnly = false;
   currentReplId = id;
   const panel = document.getElementById('replenishmentDetailPanel');
   if (panel) panel.classList.remove('hidden');
   document.getElementById('replDetailTitle').textContent = 'Purchase Request ' + req.id;
-  document.getElementById('replDetailMeta').textContent = `${req.property} â€¢ ${req.status} â€¢ Created: ${req.createdAt}`;
+  document.getElementById('replDetailMeta').textContent = `${req.property} | ${req.status} | Created: ${req.createdAt}`;
+  poFormVisible = false;
+  renderReplStatus(req);
+  renderReplPOSection(req);
+  renderInvoiceSection(req);
   document.getElementById('replPropertyInput').value = req.property || '';
   document.getElementById('replRequestorInput').value = req.requestorName || '';
   document.getElementById('replRoleInput').value = req.requestorRole || '';
@@ -1064,7 +1268,7 @@ function openReplenishmentDetail(id) {
   }));
 }
 
-function saveReplenishmentFromDetail(){ if(!currentReplId) return showToast('No request open'); const req = state.replenishmentRequests.find(r=>r.id===currentReplId); if(!req) return; req.property = document.getElementById('replPropertyInput').value || req.property; req.requestorName = document.getElementById('replRequestorInput').value || req.requestorName; req.requestorRole = document.getElementById('replRoleInput').value || req.requestorRole; req.createdAt = document.getElementById('replDateInput').value || req.createdAt; req.notes = document.getElementById('replNotesInput').value || req.notes; req.updatedAt = new Date().toISOString().slice(0,10); req.status = 'DRAFT'; showToast('Replenishment saved (draft)'); renderReplenishmentList(); openReplenishmentDetail(req.id); }
+function saveReplenishmentFromDetail(){ if(!currentReplId) return showToast('No request open'); const req = state.replenishmentRequests.find(r=>r.id===currentReplId); if(!req) return; ensureReplenishmentDefaults(req); req.property = document.getElementById('replPropertyInput').value || req.property; req.requestorName = document.getElementById('replRequestorInput').value || req.requestorName; req.requestorRole = document.getElementById('replRoleInput').value || req.requestorRole; req.createdAt = document.getElementById('replDateInput').value || req.createdAt; req.notes = document.getElementById('replNotesInput').value || req.notes; req.updatedAt = new Date().toISOString().slice(0,10); req.status = 'DRAFT'; showToast('Replenishment saved (draft)'); renderReplenishmentList(); openReplenishmentDetail(req.id); }
 
 function showReplenishmentDetail(show){
   state.activePage = show ? 'replenishment-detail' : 'replenishment-requests';
@@ -1076,6 +1280,8 @@ function showReplenishmentDetail(show){
 function closeReplenishmentDetail(){
   currentReplEditingId = null;
   replModalLines = [];
+  poFormVisible = false;
+  replDetailViewOnly = false;
   showReplenishmentDetail(false);
 }
 
@@ -1087,7 +1293,8 @@ function openReplenishmentModal(id, opts = {}){
   const existing = state.replenishmentRequests.find(r=>r.id===id);
   if(existing && existing.status === 'DRAFT' && existing.requestorName !== state.currentUser.name) return;
   if(isNew){ resetReplSelectors(); }
-  const req = existing || { id: currentReplEditingId, property: state.selectedProperty, requestorName: state.currentUser.name, requestorRole: state.currentUser.role, createdAt: today, updatedAt: today, status: 'DRAFT', items: [], deliveryDate: '', neededDate: '', approvals: buildApprovalChain() };
+  const req = existing || { id: currentReplEditingId, property: state.selectedProperty, requestorName: state.currentUser.name, requestorRole: state.currentUser.role, createdAt: today, updatedAt: today, status: 'DRAFT', items: [], deliveryDate: '', neededDate: '', approvals: buildApprovalChain(), poList: [], invoice: null };
+  ensureReplenishmentDefaults(req);
   req.approvals = req.approvals && req.approvals.length ? req.approvals : buildApprovalChain();
   replModalLines = (req.items || []).map(ln => {
     const inv = getInventoryItemWithType(ln.itemId, ln.type) || getCombinedInventory().find(x=>x.id===ln.itemId);
@@ -1095,10 +1302,11 @@ function openReplenishmentModal(id, opts = {}){
     return { ...ln, qty, department: ln.department || '', unit: ln.unit || (inv && inv.unit) || defaultUomCode(), last7DayUsage: computeLast7dUsage(ln.itemId, ln.type) };
   });
   const requestedReadOnly = !!opts.readOnly;
+  replDetailViewOnly = requestedReadOnly;
   const canEdit = (!existing && isCurrentUserPropertyPIC()) || (existing && req.status === 'DRAFT' && req.requestorName === state.currentUser.name && isCurrentUserPropertyPIC());
   replModalReadOnly = requestedReadOnly || !canEdit;
   const title = document.getElementById('replModalTitle'); if(title) title.textContent = isNew ? 'New Purchase Request' : `Purchase Request ${req.id}`;
-  const meta = document.getElementById('replDetailMeta'); if(meta) meta.textContent = `${req.status} • ${req.createdAt || today}`;
+  const meta = document.getElementById('replDetailMeta'); if(meta) meta.textContent = `${req.property || '-'} | Created: ${req.createdAt || today}`;
   setCreatedByField(req.requestorName || state.currentUser.name || '');
   const reqDateVal = req.createdAt || today;
   setRequestDateField(reqDateVal);
@@ -1109,6 +1317,10 @@ function openReplenishmentModal(id, opts = {}){
   renderReplModalLines();
   renderApprovalChips(req);
   updateApprovalButtons(req);
+  poFormVisible = false;
+  renderReplStatus(req);
+  renderReplPOSection(req);
+  renderInvoiceSection(req);
   applyReplenishmentFormLock(replModalReadOnly);
   showReplenishmentDetail(true);
 }
@@ -1472,6 +1684,7 @@ function saveReplenishmentFromModal(){
   if(!createdBy) return showToast('Created By is required');
   if(!replModalLines.length) return showToast('Add at least one item line');
   const existing = state.replenishmentRequests.find(r=>r.id===currentReplEditingId);
+  if(existing) ensureReplenishmentDefaults(existing);
   if(existing && existing.requestorName !== state.currentUser.name) return showToast('Only submitter can save this draft');
   const payload = {
     id: currentReplEditingId || nextReplId(),
@@ -1483,6 +1696,8 @@ function saveReplenishmentFromModal(){
     status: existing ? existing.status : 'DRAFT',
     neededDate,
     approvals: existing && existing.approvals ? existing.approvals : buildApprovalChain(),
+    poList: existing && Array.isArray(existing.poList) ? existing.poList : [],
+    invoice: existing ? (existing.invoice || null) : null,
     items: replModalLines.map(ln=>({
       ...ln,
       unit: ln.unit || defaultUomCode(),
@@ -1502,9 +1717,9 @@ function saveReplenishmentFromModal(){
 
 function buildApprovalChain(){
   return [
-    { name: 'Zahran', role: 'Operational Manager', status: 'PENDING', at: null },
-    { name: 'Audy', role: 'Operation Lead', status: 'PENDING', at: null },
-    { name: 'Leon', role: 'Property Head', status: 'PENDING', at: null }
+    { name: 'Rasul Syuaib', role: 'Operation Manager', status: 'PENDING', at: null },
+    { name: 'Ahmad Reza', role: 'Property Lead', status: 'PENDING', at: null },
+    { name: 'Leon Yaphar', role: 'Property Head', status: 'PENDING', at: null }
   ];
 }
 
@@ -1552,6 +1767,136 @@ function updateApprovalButtons(req){
   if(btnReject) btnReject.classList.toggle('hidden', !canAct);
 }
 
+function renderReplStatus(req){
+  if(!req) return;
+  const badge = document.getElementById('replStatusBadge');
+  const subtitleEl = document.getElementById('replStatusSubtitle');
+  const metaLine = document.getElementById('replDetailMeta');
+  const meta = getPRStatusMeta(req.status);
+  if(badge) badge.innerHTML = renderPRStatusBadge(req.status);
+  if(subtitleEl){
+    const subtitle = getPRStatusSubtitle(req.status);
+    subtitleEl.textContent = subtitle ? `Status: ${meta.label} - ${subtitle}` : `Status: ${meta.label}`;
+  }
+  if(metaLine){
+    const updated = req.updatedAt ? ` • Updated: ${req.updatedAt}` : '';
+    metaLine.textContent = `${req.property || '-'} • Created: ${req.createdAt || ''}${updated}`;
+  }
+}
+
+function resetPOFormFields(){
+  ['replPOInputNumber','replPOInputVendor','replPOInputDate','replPOInputNote'].forEach(id => {
+    const el = document.getElementById(id);
+    if(el) el.value = '';
+  });
+}
+
+function renderReplPOSection(req){
+  ensureReplenishmentDefaults(req);
+  const tbody = document.getElementById('replPOListBody');
+  const list = req.poList || [];
+  if(tbody){
+    tbody.innerHTML = '';
+    if(!list.length){
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td colspan="4" class="info-text" style="text-align:center;">No PO attached yet</td>`;
+      tbody.appendChild(tr);
+    } else {
+      list.forEach(po => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${po.poNumber}</td><td>${po.vendorName || '-'}</td><td>${po.expectedDeliveryDate || '-'}</td><td>${po.note || '-'}</td>`;
+        tbody.appendChild(tr);
+      });
+    }
+  }
+  const isLocked = req.status === 'CLOSED' || replDetailViewOnly;
+  if(isLocked) poFormVisible = false;
+  const form = document.getElementById('replPOForm');
+  if(form) form.classList.toggle('hidden', !poFormVisible || isLocked);
+  ['replPOInputNumber','replPOInputVendor','replPOInputDate','replPOInputNote'].forEach(id => {
+    const el = document.getElementById(id);
+    if(el) el.disabled = isLocked;
+  });
+  const toggleBtn = document.getElementById('btnTogglePOForm');
+  if(toggleBtn){
+    toggleBtn.textContent = (!isLocked && poFormVisible) ? 'Cancel' : 'Add PO';
+    toggleBtn.disabled = isLocked;
+    toggleBtn.onclick = ()=>{
+      if(isLocked) return;
+      poFormVisible = !poFormVisible;
+      if(poFormVisible) resetPOFormFields();
+      renderReplPOSection(req);
+    };
+  }
+  const saveBtn = document.getElementById('btnSavePO');
+  if(saveBtn){
+    saveBtn.disabled = isLocked;
+    saveBtn.onclick = ()=>savePurchaseOrderForRequest(req);
+  }
+}
+
+function savePurchaseOrderForRequest(req){
+  ensureReplenishmentDefaults(req);
+  if(replDetailViewOnly) return showToast('Read-only mode');
+  if(req.status === 'CLOSED') return showToast('PR already closed');
+  const poNumber = ((document.getElementById('replPOInputNumber') || {}).value || '').trim();
+  const vendorName = ((document.getElementById('replPOInputVendor') || {}).value || '').trim();
+  const expectedDeliveryDate = (document.getElementById('replPOInputDate') || {}).value || '';
+  const note = (document.getElementById('replPOInputNote') || {}).value || '';
+  if(!poNumber || !vendorName || !expectedDeliveryDate) return showToast('PO Number, Vendor, and Expected Delivery Date are required');
+  req.poList.push({ poNumber, vendorName, expectedDeliveryDate, note });
+  if(['WAITING_PO','IN_REVIEW','APPROVED'].includes(req.status)){
+    req.status = 'PO_ISSUED';
+  }
+  req.updatedAt = new Date().toISOString().slice(0,10);
+  poFormVisible = false;
+  renderReplPOSection(req);
+  renderReplStatus(req);
+  renderReplenishmentList();
+  showToast('PO added to request');
+}
+
+function renderInvoiceSection(req){
+  ensureReplenishmentDefaults(req);
+  const inv = req.invoice || {};
+  const isLocked = req.status === 'CLOSED' || replDetailViewOnly;
+  const num = document.getElementById('replInvoiceNumber');
+  const date = document.getElementById('replInvoiceDate');
+  const amt = document.getElementById('replInvoiceAmount');
+  const note = document.getElementById('replInvoiceNote');
+  const saveBtn = document.getElementById('btnSaveInvoice');
+  if(num){ num.value = inv.invoiceNumber || ''; num.disabled = isLocked; }
+  if(date){ date.value = inv.invoiceDate || ''; date.disabled = isLocked; }
+  if(amt){ amt.value = inv.invoiceAmount ?? ''; amt.disabled = isLocked; }
+  if(note){ note.value = inv.note || ''; note.disabled = isLocked; }
+  if(saveBtn){
+    saveBtn.classList.toggle('hidden', isLocked);
+    saveBtn.disabled = isLocked;
+    saveBtn.onclick = ()=>saveInvoiceForRequest(req);
+  }
+}
+
+function saveInvoiceForRequest(req){
+  ensureReplenishmentDefaults(req);
+  if(replDetailViewOnly) return showToast('Read-only mode');
+  if(req.status === 'CLOSED') return showToast('PR already closed');
+  const invoiceNumber = ((document.getElementById('replInvoiceNumber') || {}).value || '').trim();
+  const invoiceDate = (document.getElementById('replInvoiceDate') || {}).value || '';
+  const amountRaw = (document.getElementById('replInvoiceAmount') || {}).value;
+  const invoiceAmount = amountRaw === '' || amountRaw === null ? undefined : safeNumber(amountRaw);
+  const note = (document.getElementById('replInvoiceNote') || {}).value || '';
+  if(!invoiceNumber) return showToast('Invoice Number is required');
+  if(!invoiceDate) return showToast('Invoice Date is required');
+  req.invoice = { invoiceNumber, invoiceDate, invoiceAmount, note };
+  req.status = 'CLOSED';
+  req.updatedAt = new Date().toISOString().slice(0,10);
+  renderInvoiceSection(req);
+  renderReplStatus(req);
+  renderReplPOSection(req);
+  renderReplenishmentList();
+  showToast('Invoice saved; PR closed');
+}
+
 function submitReplenishmentForApproval(){
   const createdBy = (document.getElementById('replModalCreatedBy') || {}).value || '';
   const requestDate = (document.getElementById('replModalRequestDate') || {}).value || new Date().toISOString().slice(0,10);
@@ -1581,11 +1926,14 @@ function submitReplenishmentForApproval(){
       deliveryDate,
       neededDate,
       approvals: buildApprovalChain(),
-      items: itemsPayload
+      items: itemsPayload,
+      poList: [],
+      invoice: null
     };
     state.replenishmentRequests.push(req);
     currentReplEditingId = req.id;
   }
+  ensureReplenishmentDefaults(req);
 
   if(req.requestorName !== state.currentUser.name) return showToast('Only submitter can submit this draft');
   if(req.status !== 'DRAFT' && req.status !== 'REJECTED') return showToast('Already submitted');
@@ -1600,6 +1948,9 @@ function submitReplenishmentForApproval(){
   req.items = itemsPayload;
   req.status = 'IN_REVIEW';
   req.updatedAt = new Date().toISOString().slice(0,10);
+  renderReplStatus(req);
+  renderReplPOSection(req);
+  renderInvoiceSection(req);
   showToast('Submitted for approval');
   renderApprovalChips(req);
   updateApprovalButtons(req);
@@ -1609,13 +1960,17 @@ function submitReplenishmentForApproval(){
 function approveReplenishment(){
   const req = state.replenishmentRequests.find(r=>r.id===currentReplEditingId);
   if(!req) return;
+  ensureReplenishmentDefaults(req);
   const pending = nextPendingApprover(req);
   if(!pending || pending.name !== state.currentUser.name) return showToast('Not authorized to approve now');
   pending.status = 'APPROVED';
   pending.at = new Date().toISOString().slice(0,10);
   const stillPending = nextPendingApprover(req);
-  req.status = stillPending ? 'IN_REVIEW' : 'APPROVED';
+  req.status = stillPending ? 'IN_REVIEW' : 'WAITING_PO';
   req.updatedAt = new Date().toISOString().slice(0,10);
+  renderReplStatus(req);
+  renderReplPOSection(req);
+  renderInvoiceSection(req);
   renderApprovalChips(req);
   updateApprovalButtons(req);
   renderReplenishmentList();
@@ -1625,12 +1980,16 @@ function approveReplenishment(){
 function rejectReplenishment(){
   const req = state.replenishmentRequests.find(r=>r.id===currentReplEditingId);
   if(!req) return;
+  ensureReplenishmentDefaults(req);
   const pending = nextPendingApprover(req);
   if(!pending || pending.name !== state.currentUser.name) return showToast('Not authorized to reject now');
   pending.status = 'REJECTED';
   pending.at = new Date().toISOString().slice(0,10);
   req.status = 'REJECTED';
   req.updatedAt = new Date().toISOString().slice(0,10);
+  renderReplStatus(req);
+  renderReplPOSection(req);
+  renderInvoiceSection(req);
   renderApprovalChips(req);
   updateApprovalButtons(req);
   renderReplenishmentList();
@@ -1670,8 +2029,10 @@ function renderProcurementOverview(){
 
 /* Stock Movements */
 function bindStockMovements(){
-  const openIn = document.getElementById('btnOpenIncomingModal'); if(openIn) openIn.addEventListener('click', ()=>{ resetMovementForms('IN'); openModal('modalIncoming'); });
-  const openOut = document.getElementById('btnOpenOutgoingModal'); if(openOut) openOut.addEventListener('click', ()=>{ resetMovementForms('OUT'); openModal('modalOutgoing'); });
+  const openIn = document.getElementById('btnOpenIncomingModal'); if(openIn) openIn.addEventListener('click', ()=>{ resetMovementForms('IN'); showIncomingCreatePage(true); });
+  const backIn = document.getElementById('btnBackIncomingList'); if(backIn) backIn.addEventListener('click', ()=>{ showIncomingCreatePage(false); });
+  const openOut = document.getElementById('btnOpenOutgoingModal'); if(openOut) openOut.addEventListener('click', ()=>{ resetMovementForms('OUT'); showOutgoingCreatePage(true); });
+  const backOut = document.getElementById('btnBackOutgoingList'); if(backOut) backOut.addEventListener('click', ()=>{ showOutgoingCreatePage(false); });
   const btnAddIn = document.getElementById('btnAddIncomingLine'); if(btnAddIn) btnAddIn.addEventListener('click', ()=>{ addMovementLine('IN'); });
   const btnAddOut = document.getElementById('btnAddOutgoingLine'); if(btnAddOut) btnAddOut.addEventListener('click', ()=>{ addMovementLine('OUT'); });
   const btnPostIn = document.getElementById('btnPostIncoming'); if(btnPostIn) btnPostIn.addEventListener('click', postIncomingDocument);
@@ -1688,6 +2049,10 @@ function bindStockMovements(){
   const searchInput = document.getElementById('movementSearchInput'); if(searchInput) searchInput.addEventListener('input', ()=>{ movementHistoryPage = 1; renderMovementHistory(); });
   const prevBtn = document.getElementById('movementPrevPage'); if(prevBtn) prevBtn.addEventListener('click', ()=>{ movementHistoryPage = Math.max(1, movementHistoryPage-1); renderMovementHistory(); });
   const nextBtn = document.getElementById('movementNextPage'); if(nextBtn) nextBtn.addEventListener('click', ()=>{ movementHistoryPage = movementHistoryPage+1; renderMovementHistory(); });
+  const inPrev = document.getElementById('incomingPrevPage'); if(inPrev) inPrev.addEventListener('click', ()=>{ incomingPage = Math.max(1, incomingPage-1); renderMovementDocLists(); });
+  const inNext = document.getElementById('incomingNextPage'); if(inNext) inNext.addEventListener('click', ()=>{ incomingPage = incomingPage+1; renderMovementDocLists(); });
+  const outPrev = document.getElementById('outgoingPrevPage'); if(outPrev) outPrev.addEventListener('click', ()=>{ outgoingPage = Math.max(1, outgoingPage-1); renderMovementDocLists(); });
+  const outNext = document.getElementById('outgoingNextPage'); if(outNext) outNext.addEventListener('click', ()=>{ outgoingPage = outgoingPage+1; renderMovementDocLists(); });
   document.querySelectorAll('[data-record-tab]').forEach(btn => btn.addEventListener('click', ()=>{ setMovementContext(btn.dataset.recordTab || 'IN', movementTabScope); }));
 }
 
@@ -1707,6 +2072,9 @@ function bindPOPicker(){
       poSearchQuery = search.value || '';
       renderPODatalist();
       openPODropdown();
+      if(!(search.value || '').trim()){
+        clearIncomingPOSelection();
+      }
     });
   }
   if(moreBtn){
@@ -1742,6 +2110,13 @@ function selectPO(poNumber){
   handlePOSelection();
 }
 
+function clearIncomingPOSelection(){
+  const hidden = document.getElementById('incomingPONumber');
+  if(hidden) hidden.value = '';
+  incomingPOLocked = false;
+  resetIncomingLinesToBlank();
+}
+
 function updateIncomingPOFieldState(){
   const src = (document.getElementById('incomingSourceType') || {}).value || 'WITH_PO';
   const poSearch = document.getElementById('incomingPOSearch');
@@ -1765,6 +2140,13 @@ function updateIncomingPOFieldState(){
   if(deliveryInput){
     deliveryInput.disabled = disabled;
     if(disabled && !forceDisabled) deliveryInput.value = '';
+  }
+  const poSearchWrapper = poSearch ? poSearch.closest('.po-search') : null;
+  if(poSearchWrapper) poSearchWrapper.classList.toggle('is-disabled', disabled);
+  if(disabled && !forceDisabled){
+    incomingPOLocked = false;
+    resetIncomingLinesToBlank();
+    renderMovementLines('IN');
   }
 }
 
@@ -1806,7 +2188,8 @@ function resetMovementForms(direction){
   const doOut = !direction || direction === 'OUT';
   if(doIn){
     incomingModalReadOnly = false;
-    const inTitle = document.querySelector('#modalIncoming .modal__header h3'); if(inTitle) inTitle.textContent = 'New Incoming';
+    incomingPOLocked = false;
+    const inTitle = document.getElementById('incomingCreateTitle'); if(inTitle) inTitle.textContent = 'New Incoming';
     const inDate = document.getElementById('incomingDate'); if(inDate) inDate.value = today;
     const inProp = document.getElementById('incomingProperty'); if(inProp) inProp.value = state.selectedProperty;
     const src = document.getElementById('incomingSourceType'); if(src) src.value = 'WITH_PO';
@@ -1820,10 +2203,12 @@ function resetMovementForms(direction){
     renderIncomingAttachmentLinks(null);
     incomingFormLines = [];
     editingIncomingId = null;
+    incomingPage = 1;
     addMovementLine('IN');
     renderMovementLines('IN');
     setIncomingFormDisabled(false);
     updateIncomingPOFieldState();
+    showIncomingCreatePage(true);
   }
   if(doOut){
     const outDate = document.getElementById('outgoingDate'); if(outDate) outDate.value = today;
@@ -1833,15 +2218,20 @@ function resetMovementForms(direction){
     const outNote = document.getElementById('outgoingNote'); if(outNote) outNote.value = '';
     outgoingFormLines = [];
     editingOutgoingId = null;
+    outgoingPage = 1;
     addMovementLine('OUT');
     renderMovementLines('OUT');
+    showOutgoingCreatePage(true);
   }
 }
 
 function addMovementLine(direction){
   const allItems = getCombinedInventory();
   const firstItem = allItems[0];
-  const line = firstItem ? { itemId: firstItem.id, itemName: firstItem.name, type: firstItem.type, uom: firstItem.unit, qty: 0 } : { itemId: null, itemName: '', type: 'ROOM', uom: defaultUomCode(), qty: 0 };
+  const allowBlank = direction === 'IN' && !incomingPOLocked;
+  const line = allowBlank
+    ? { itemId: null, itemName: '', type: 'ROOM', uom: defaultUomCode(), qty: 0 }
+    : (firstItem ? { itemId: firstItem.id, itemName: firstItem.name, type: firstItem.type, uom: firstItem.unit, qty: 0 } : { itemId: null, itemName: '', type: 'ROOM', uom: defaultUomCode(), qty: 0 });
   if(direction === 'IN'){ incomingFormLines.push(line); } else { outgoingFormLines.push(line); }
   renderMovementLines(direction);
 }
@@ -1849,7 +2239,7 @@ function addMovementLine(direction){
 function openIncomingDetail(doc, readOnly = true){
   if(!doc) return;
   incomingModalReadOnly = !!readOnly;
-  const titleEl = document.querySelector('#modalIncoming .modal__header h3');
+  const titleEl = document.getElementById('incomingCreateTitle');
   if(titleEl) titleEl.textContent = readOnly ? 'Incoming Detail' : 'Incoming';
   const inDate = document.getElementById('incomingDate'); if(inDate) inDate.value = doc.date || '';
   const inProp = document.getElementById('incomingProperty'); if(inProp) inProp.value = doc.property || '';
@@ -1866,7 +2256,9 @@ function openIncomingDetail(doc, readOnly = true){
   }));
   renderMovementLines('IN');
   renderIncomingAttachmentLinks(doc);
-  openModal('modalIncoming');
+  setIncomingFormDisabled(!!readOnly);
+  updateIncomingPOFieldState();
+  showIncomingCreatePage(true);
 }
 
 function renderMovementLines(direction){
@@ -1874,7 +2266,7 @@ function renderMovementLines(direction){
   const tbody = document.getElementById(tbodyId);
   if(!tbody) return;
   const lines = direction === 'IN' ? incomingFormLines : outgoingFormLines;
-  const readOnly = direction === 'IN' && incomingModalReadOnly;
+  const readOnly = direction === 'IN' && (incomingModalReadOnly || isIncomingPOLocked());
   tbody.innerHTML = '';
   const allItems = getCombinedInventory();
   if(!allItems.length){
@@ -1884,11 +2276,13 @@ function renderMovementLines(direction){
   if(!lines.length && allItems.length){ addMovementLine(direction); return; }
   lines.forEach((ln, idx)=>{
     const tr = document.createElement('tr');
+    const placeholderOpt = `<option value="" ${ln.itemId ? '' : 'selected'}>Select item</option>`;
     const options = allItems.map(it => `<option value="${it.id}" ${ln.itemId===it.id?'selected':''}>${it.name} (${it.type})</option>`).join('');
     const uomLabel = getUomLabel(ln.uom);
     tr.innerHTML = `
       <td>
         <select class="input input--inline" data-mv-item="${direction}-${idx}" ${readOnly?'disabled':''}>
+          ${placeholderOpt}
           ${options}
         </select>
       </td>
@@ -1898,12 +2292,25 @@ function renderMovementLines(direction){
     tbody.appendChild(tr);
   });
 
+  const searchOpts = allItems.map(it => ({ value: it.id, label: `${it.name} (${it.type})` }));
+  tbody.querySelectorAll('[data-mv-item]').forEach(sel => {
+    bindSearchableSelect(sel, searchOpts);
+  });
+
   tbody.querySelectorAll('[data-mv-item]').forEach(sel => sel.addEventListener('change',(e)=>{
     const [dir,index] = e.target.dataset.mvItem.split('-');
     const idxNum = Number(index);
     const arr = dir === 'IN' ? incomingFormLines : outgoingFormLines;
+    if(!arr[idxNum]) return;
     const it = getCombinedInventory().find(x=>x.id===e.target.value);
-    if(!arr[idxNum] || !it) return;
+    if(!it){
+      arr[idxNum].itemId = null;
+      arr[idxNum].itemName = '';
+      arr[idxNum].type = 'ROOM';
+      arr[idxNum].uom = defaultUomCode();
+      renderMovementLines(dir);
+      return;
+    }
     arr[idxNum].itemId = it.id;
     arr[idxNum].itemName = it.name;
     arr[idxNum].type = it.type;
@@ -1918,6 +2325,17 @@ function renderMovementLines(direction){
     if(!arr[idxNum]) return;
     arr[idxNum].qty = safeNumber(e.target.value);
   }));
+}
+
+function isIncomingPOLocked(){
+  const src = (document.getElementById('incomingSourceType') || {}).value || 'WITH_PO';
+  const po = (document.getElementById('incomingPONumber') || {}).value || '';
+  return src === 'WITH_PO' && !!po;
+}
+
+function resetIncomingLinesToBlank(){
+  incomingFormLines = [];
+  addMovementLine('IN');
 }
 
 function buildMovementDoc(lines){
@@ -1959,6 +2377,7 @@ function handlePOSelection(){
   const poNumber = (document.getElementById('incomingPONumber') || {}).value || '';
   const po = PO_CATALOG.find(p => p.number === poNumber);
   if(!po) return;
+  incomingPOLocked = true;
   incomingFormLines = po.items.map(it => {
     const inv = getInventoryItemWithType(it.itemId, it.type) || getCombinedInventory().find(x=>x.id===it.itemId);
     return { itemId: it.itemId, itemName: (inv && inv.name) || 'Unknown', type: it.type, uom: (inv && inv.unit) || defaultUomCode(), qty: safeNumber(it.qty) };
@@ -1966,6 +2385,28 @@ function handlePOSelection(){
   const noteEl = document.getElementById('incomingNote'); if(noteEl) noteEl.value = po.note || '';
   renderMovementLines('IN');
   showToast('PO items loaded');
+}
+
+function bumpPRStatusByPO(poNumber){
+  const cleaned = (poNumber || '').trim();
+  if(!cleaned || cleaned === '-') return [];
+  const today = new Date().toISOString().slice(0,10);
+  const updated = [];
+  state.replenishmentRequests.forEach(req => {
+    ensureReplenishmentDefaults(req);
+    const match = (req.poList || []).some(po => po.poNumber === cleaned);
+    if(match && req.status === 'PO_ISSUED'){
+      req.status = 'WAITING_INVOICE';
+      req.updatedAt = today;
+      updated.push(req.id);
+      if(currentReplEditingId === req.id){
+        renderReplStatus(req);
+        renderReplPOSection(req);
+        renderInvoiceSection(req);
+      }
+    }
+  });
+  return updated;
 }
 
 function postIncomingDocument(){
@@ -1996,15 +2437,21 @@ function postIncomingDocument(){
     lines: payloadLines,
     history: existing ? existing.history : []
   };
+  const isUpdating = !!existing;
   if(existing){
     modifyMovement(existing, 'IN', doc);
-    showToast('Incoming movement updated');
   } else {
     postMovement(doc, 'IN');
-    showToast('Incoming posted');
+  }
+  const statusUpdates = sourceType === 'WITH_PO' ? bumpPRStatusByPO(poNumber) : [];
+  if(statusUpdates.length){
+    renderAll();
+    showToast(`Incoming posted; PR ${statusUpdates.join(', ')} moved to WAITING_INVOICE`);
+  } else {
+    showToast(isUpdating ? 'Incoming movement updated' : 'Incoming posted');
   }
   resetMovementForms('IN');
-  closeModal('modalIncoming');
+  showIncomingCreatePage(false);
 }
 
 function postOutgoingDocument(){
@@ -2033,7 +2480,7 @@ function postOutgoingDocument(){
     showToast('Outgoing posted');
   }
   resetMovementForms('OUT');
-  closeModal('modalOutgoing');
+  showOutgoingCreatePage(false);
 }
 
 function renderStockMovementsView(){
@@ -2060,31 +2507,59 @@ function renderMovementDocLists(){
   const inTbody = document.getElementById('incomingDocsTableBody');
   if(inTbody){
     inTbody.innerHTML='';
-    state.incomingDocs.slice().reverse().forEach(doc=>{
-      const totalQty = doc.lines.reduce((s,l)=>s+safeNumber(l.qty),0);
-      const showLinks = doc.sourceType === 'WITH_PO';
-      const bastLink = showLinks ? `<a href="#" class="doc-link" data-src="https://files.catbox.moe/icgac1.jpg" data-title="BAST Attachment">BAST</a>` : '-';
-      const deliveryLink = showLinks ? `<a href="#" class="doc-link" data-src="https://files.catbox.moe/aggrj5.jpg" data-title="Delivery Proof">Delivery Proof</a>` : '-';
+    const rows = state.incomingDocs.slice().reverse();
+    const totalPages = Math.max(1, Math.ceil(Math.max(rows.length,1) / INCOMING_PAGE_SIZE));
+    incomingPage = Math.min(incomingPage, totalPages);
+    const start = (incomingPage - 1) * INCOMING_PAGE_SIZE;
+    const slice = rows.slice(start, start + INCOMING_PAGE_SIZE);
+    if(!slice.length){
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${doc.id}</td><td>${doc.date}</td><td>${doc.property}</td><td>${doc.poNumber || '-'}</td><td>${doc.note || '-'}</td><td>${bastLink}</td><td>${deliveryLink}</td><td><span class="badge ${doc.status==='POSTED'?'badge--active':'badge--archived'}">${doc.status||'-'}</span></td><td>${doc.lines.length}</td><td>${totalQty}</td><td class="table-actions-col"><button class="btn btn-secondary btn-sm" data-mv-action="view" data-dir="IN" data-id="${doc.id}">View</button> <button class="btn btn-secondary btn-sm" data-mv-action="discard" data-dir="IN" data-id="${doc.id}">Discard</button></td>`;
+      tr.innerHTML = `<td colspan="11" style="text-align:center; color: var(--color-text-muted);">No incoming records yet</td>`;
       inTbody.appendChild(tr);
-    });
-    inTbody.querySelectorAll('.doc-link').forEach(link => link.addEventListener('click', (e)=>{
-      e.preventDefault();
-      const src = link.dataset.src;
-      if(!src) return;
-      openDocumentPreview(src, link.dataset.title || 'Document');
-    }));
+    } else {
+      slice.forEach(doc=>{
+        const totalQty = doc.lines.reduce((s,l)=>s+safeNumber(l.qty),0);
+        const showLinks = doc.sourceType === 'WITH_PO';
+        const bastLink = showLinks ? `<a href="#" class="doc-link" data-src="https://files.catbox.moe/icgac1.jpg" data-title="BAST Attachment">BAST</a>` : '-';
+        const deliveryLink = showLinks ? `<a href="#" class="doc-link" data-src="https://files.catbox.moe/aggrj5.jpg" data-title="Delivery Proof">Delivery Proof</a>` : '-';
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${doc.id}</td><td>${doc.date}</td><td>${doc.property}</td><td>${doc.poNumber || '-'}</td><td>${doc.note || '-'}</td><td>${bastLink}</td><td>${deliveryLink}</td><td><span class="badge ${doc.status==='POSTED'?'badge--active':'badge--archived'}">${doc.status||'-'}</span></td><td>${doc.lines.length}</td><td>${totalQty}</td><td class="table-actions-col"><button class="btn btn-secondary btn-sm" data-mv-action="view" data-dir="IN" data-id="${doc.id}">View</button> <button class="btn btn-secondary btn-sm" data-mv-action="discard" data-dir="IN" data-id="${doc.id}">Discard</button></td>`;
+        inTbody.appendChild(tr);
+      });
+      inTbody.querySelectorAll('.doc-link').forEach(link => link.addEventListener('click', (e)=>{
+        e.preventDefault();
+        const src = link.dataset.src;
+        if(!src) return;
+        openDocumentPreview(src, link.dataset.title || 'Document');
+      }));
+    }
+    const info = document.getElementById('incomingPageInfo'); if(info) info.textContent = `Page ${incomingPage} / ${totalPages}`;
+    const prev = document.getElementById('incomingPrevPage'); if(prev) prev.disabled = incomingPage <= 1;
+    const next = document.getElementById('incomingNextPage'); if(next) next.disabled = incomingPage >= totalPages;
   }
   const outTbody = document.getElementById('outgoingDocsTableBody');
   if(outTbody){
     outTbody.innerHTML='';
-    state.outgoingDocs.slice().reverse().forEach(doc=>{
-      const totalQty = doc.lines.reduce((s,l)=>s+safeNumber(l.qty),0);
+    const rows = state.outgoingDocs.slice().reverse();
+    const totalPages = Math.max(1, Math.ceil(Math.max(rows.length,1) / OUTGOING_PAGE_SIZE));
+    outgoingPage = Math.min(outgoingPage, totalPages);
+    const start = (outgoingPage - 1) * OUTGOING_PAGE_SIZE;
+    const slice = rows.slice(start, start + OUTGOING_PAGE_SIZE);
+    if(!slice.length){
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${doc.id}</td><td>${doc.date}</td><td>${doc.property}</td><td>${doc.destRef || '-'}</td><td>${doc.note || '-'}</td><td><span class="badge ${doc.status==='POSTED'?'badge--active':'badge--archived'}">${doc.status||'-'}</span></td><td>${doc.lines.length}</td><td>${totalQty}</td><td class="table-actions-col"><button class="btn btn-secondary btn-sm" data-mv-action="view" data-dir="OUT" data-id="${doc.id}">View</button> <button class="btn btn-secondary btn-sm" data-mv-action="discard" data-dir="OUT" data-id="${doc.id}">Discard</button></td>`;
+      tr.innerHTML = `<td colspan="9" style="text-align:center; color: var(--color-text-muted);">No outgoing records yet</td>`;
       outTbody.appendChild(tr);
-    });
+    } else {
+      slice.forEach(doc=>{
+        const totalQty = doc.lines.reduce((s,l)=>s+safeNumber(l.qty),0);
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${doc.id}</td><td>${doc.date}</td><td>${doc.property}</td><td>${doc.destRef || '-'}</td><td>${doc.note || '-'}</td><td><span class="badge ${doc.status==='POSTED'?'badge--active':'badge--archived'}">${doc.status||'-'}</span></td><td>${doc.lines.length}</td><td>${totalQty}</td><td class="table-actions-col"><button class="btn btn-secondary btn-sm" data-mv-action="view" data-dir="OUT" data-id="${doc.id}">View</button> <button class="btn btn-secondary btn-sm" data-mv-action="discard" data-dir="OUT" data-id="${doc.id}">Discard</button></td>`;
+        outTbody.appendChild(tr);
+      });
+    }
+    const info = document.getElementById('outgoingPageInfo'); if(info) info.textContent = `Page ${outgoingPage} / ${totalPages}`;
+    const prev = document.getElementById('outgoingPrevPage'); if(prev) prev.disabled = outgoingPage <= 1;
+    const next = document.getElementById('outgoingNextPage'); if(next) next.disabled = outgoingPage >= totalPages;
   }
   document.querySelectorAll('[data-mv-action]').forEach(btn => btn.addEventListener('click', handleMovementAction));
 }
@@ -2111,12 +2586,18 @@ function renderMovementHistory(){
   const start = (movementHistoryPage - 1) * MOVEMENT_PAGE_SIZE;
   const slice = rows.slice(start, start + MOVEMENT_PAGE_SIZE);
   tbody.innerHTML = '';
-  slice.forEach(doc => {
-    const totalQty = (doc.lines || []).reduce((s,l)=>s+safeNumber(l.qty),0);
+  if(!slice.length){
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${doc.id}</td><td>${doc.direction}</td><td>${doc.date}</td><td>${doc.property || '-'}</td><td>${doc.note || '-'}</td><td><span class="badge ${doc.status==='POSTED'?'badge--active':'badge--archived'}">${doc.status || '-'}</span></td><td>${(doc.lines || []).length}</td><td>${totalQty}</td><td class="table-actions-col"><button class="btn btn-secondary btn-sm" data-mv-action="view" data-dir="${doc.direction}" data-id="${doc.id}">View</button></td>`;
+    tr.innerHTML = `<td colspan="9" style="text-align:center; color: var(--color-text-muted);">No movements yet</td>`;
     tbody.appendChild(tr);
-  });
+  } else {
+    slice.forEach(doc => {
+      const totalQty = (doc.lines || []).reduce((s,l)=>s+safeNumber(l.qty),0);
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${doc.id}</td><td>${doc.direction}</td><td>${doc.date}</td><td>${doc.property || '-'}</td><td>${doc.note || '-'}</td><td><span class="badge ${doc.status==='POSTED'?'badge--active':'badge--archived'}">${doc.status || '-'}</span></td><td>${(doc.lines || []).length}</td><td>${totalQty}</td><td class="table-actions-col"><button class="btn btn-secondary btn-sm" data-mv-action="view" data-dir="${doc.direction}" data-id="${doc.id}">View</button></td>`;
+      tbody.appendChild(tr);
+    });
+  }
   document.querySelectorAll('#movementHistoryTableBody [data-mv-action]').forEach(btn => btn.addEventListener('click', handleMovementAction));
   const info = document.getElementById('movementPageInfo'); if(info) info.textContent = `Page ${movementHistoryPage} / ${totalPages}`;
 }
@@ -2193,18 +2674,32 @@ function openMovementDetail(doc, direction){
 function bindStockOnHand(){
   const btn = document.getElementById('btnPrintStockOnHand');
   if(btn) btn.addEventListener('click', ()=>window.print());
+  const prev = document.getElementById('stockOnHandPrev'); if(prev) prev.addEventListener('click', ()=>{ stockOnHandPage = Math.max(1, stockOnHandPage-1); renderStockOnHand(); });
+  const next = document.getElementById('stockOnHandNext'); if(next) next.addEventListener('click', ()=>{ stockOnHandPage = stockOnHandPage+1; renderStockOnHand(); });
 }
 
 function renderStockOnHand(){
   const tbody = document.getElementById('stockOnHandTableBody');
   if(!tbody) return;
-  tbody.innerHTML = '';
   const items = getCombinedInventory();
-  items.forEach(it => {
+  const totalPages = Math.max(1, Math.ceil(Math.max(items.length,1) / TABLE_PAGE_SIZE));
+  stockOnHandPage = Math.min(stockOnHandPage, totalPages);
+  const slice = items.slice((stockOnHandPage-1)*TABLE_PAGE_SIZE, stockOnHandPage*TABLE_PAGE_SIZE);
+  tbody.innerHTML = '';
+  if(!slice.length){
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${it.name}</td><td>${it.type}</td><td>${getUomLabel(it.unit)}</td><td>${it.onHand ?? 0}</td><td>${it.minStock ?? '-'}</td><td>${it.maxStock ?? '-'}</td><td><span class="badge ${it.mandatory?'badge--yes':'badge--no'}">${it.mandatory?'Yes':'No'}</span></td>`;
+    tr.innerHTML = `<td colspan="7" style="text-align:center; color: var(--color-text-muted);">No items</td>`;
     tbody.appendChild(tr);
-  });
+  } else {
+    slice.forEach(it => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${it.name}</td><td>${it.type}</td><td>${getUomLabel(it.unit)}</td><td>${it.onHand ?? 0}</td><td>${it.minStock ?? '-'}</td><td>${it.maxStock ?? '-'}</td><td><span class="badge ${it.mandatory?'badge--yes':'badge--no'}">${it.mandatory?'Yes':'No'}</span></td>`;
+      tbody.appendChild(tr);
+    });
+  }
+  const info = document.getElementById('stockOnHandPageInfo'); if(info) info.textContent = `Page ${stockOnHandPage} / ${totalPages}`;
+  const prev = document.getElementById('stockOnHandPrev'); if(prev) prev.disabled = stockOnHandPage <= 1;
+  const next = document.getElementById('stockOnHandNext'); if(next) next.disabled = stockOnHandPage >= totalPages;
 }
 
 function openModal(id){ const m = document.getElementById(id); if(!m) return; m.classList.remove('hidden'); }
@@ -2219,6 +2714,26 @@ function openDocumentPreview(src, title){
   }
   if(titleEl) titleEl.textContent = title || 'Document Preview';
   openModal('modalDocPreview');
+}
+
+function showIncomingCreatePage(open = true){
+  state.activePage = open ? 'incoming-create' : 'stock-movements';
+  if(open){
+    setMovementContext('IN','IN');
+  }
+  const navBtn = document.querySelector('.nav-item[data-page="stock-movements"]');
+  if(navBtn) setActiveNav(navBtn);
+  renderAll();
+}
+
+function showOutgoingCreatePage(open = true){
+  state.activePage = open ? 'outgoing-create' : 'stock-movements';
+  if(open){
+    setMovementContext('OUT','OUT');
+  }
+  const navBtn = document.querySelector('.nav-item[data-page="stock-movements"]');
+  if(navBtn) setActiveNav(navBtn);
+  renderAll();
 }
 
 // Basic modal wiring for close buttons and backdrops
