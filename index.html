@@ -17,17 +17,21 @@
         <span>RedIMS</span>
       </div>
       <nav class="sidebar__nav">
-        <button class="nav-item active" data-page="room-inventory">Room Inventory</button>
+        <button class="nav-item active" data-page="property-inventory">Property Inventory</button>
+        <button class="nav-item" data-page="room-inventory">Room Inventory</button>
         <button class="nav-item" data-page="laundry-inventory">Laundry Inventory</button>
         <button class="nav-item nav-item--parent" data-page="stock-movements" data-group="stock-movements" aria-expanded="true">Stock Movements</button>
         <div class="nav-children is-open" data-group="stock-movements">
           <button class="nav-item nav-item--child" data-page="stock-movements" data-group="stock-movements" data-record-tab="IN">Incoming</button>
           <button class="nav-item nav-item--child" data-page="stock-movements" data-group="stock-movements" data-record-tab="OUT">Outgoing</button>
+          <button class="nav-item nav-item--child" data-page="stock-movements" data-group="stock-movements" data-record-tab="HISTORY">Movement History</button>
         </div>
         <button class="nav-item" data-page="stock-alert">Stock Alert<span id="navStockAlertDot" class="nav-dot"></span></button>
         <button class="nav-item" data-page="stock-opname">Stock Opname</button>
         <button class="nav-item" data-page="replenishment-requests">Purchase Request</button>
         <button class="nav-item" data-page="stock-on-hand">Stock On Hand</button>
+        <button class="nav-item" data-page="inventory-journal">Inventory Journal</button>
+        <button class="nav-item" data-page="inventory-ledger">Inventory Ledger</button>
       </nav>
     </aside>
 
@@ -68,8 +72,65 @@
 
       <!-- Page container -->
       <main class="main">
+        <!-- Property Inventory Page -->
+        <section id="page-property-inventory" class="page page--active">
+          <div class="page-header">
+            <div>
+              <h2>Property Inventory</h2>
+              <p>Register of fixed assets and equipment owned by each property.</p>
+            </div>
+            <button id="btnAddPropertyAsset" class="btn btn-primary">Add Property Asset</button>
+          </div>
+          <div class="filters-row">
+            <div class="filter-group">
+              <select id="propertyInventoryCategoryFilter" class="input">
+                <option value="all">All Categories</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <select id="propertyInventoryStatusFilter" class="input">
+                <option value="all">All Status</option>
+                <option value="ACTIVE">Active</option>
+                <option value="IN_REPAIR">In Repair</option>
+                <option value="ARCHIVED">Archived</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <input id="propertyInventorySearchInput" class="input" placeholder="Search asset, vendor, location, or cost center" />
+            </div>
+          </div>
+          <div class="card">
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Asset Name</th>
+                    <th>Category</th>
+                    <th>Vendor</th>
+                    <th>Unit</th>
+                    <th>Total Qty</th>
+                    <th>Good Qty</th>
+                    <th>Needs Service Qty</th>
+                    <th>Damaged Qty</th>
+                    <th>Status</th>
+                    <th>Location</th>
+                    <th>Cost Center</th>
+                    <th class="table-actions-col">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="propertyInventoryTableBody"></tbody>
+              </table>
+            </div>
+            <div class="pagination">
+              <button id="propertyInventoryPrev" class="btn btn-secondary btn-sm">Prev</button>
+              <span id="propertyInventoryPageInfo" class="info-text"></span>
+              <button id="propertyInventoryNext" class="btn btn-secondary btn-sm">Next</button>
+            </div>
+          </div>
+        </section>
+
         <!-- Room Inventory Page -->
-        <section id="page-room-inventory" class="page page--active">
+        <section id="page-room-inventory" class="page">
           <div class="page-header">
             <div>
               <h2>Room Inventory</h2>
@@ -108,11 +169,16 @@
                     <th>Item Name</th>
                     <th>Vendor</th>
                     <th>Category</th>
+                    <th>Cost Center</th>
+                    <th>Room Type</th>
                     <th>Unit</th>
                     <th>Mandatory</th>
-                    <th>Par / Room</th>
+                    <th>Suggest on Housekeeping Task</th>
+                    <th>POR</th>
                     <th>Min Stock</th>
                     <th>Max Stock</th>
+                    <th>Suggested Restock Quantity</th>
+                    <th>Lead Time</th>
                     <th>On-hand</th>
                     <th>Status</th>
                     <th class="table-actions-col">Actions</th>
@@ -174,6 +240,10 @@
               <div class="form-group form-group--full">
                 <label for="incomingNote">Note</label>
                 <input id="incomingNote" class="input" placeholder="Notes / remark" />
+              </div>
+              <div id="incomingDiscardReasonWrap" class="form-group form-group--full hidden">
+                <label for="incomingDiscardReason">Discard Reason</label>
+                <input id="incomingDiscardReason" class="input" readonly />
               </div>
               <div class="form-group form-group--full">
                 <label for="incomingBast">BAST Attachment (image or doc, required)</label>
@@ -251,10 +321,15 @@
                     <th>Item Name</th>
                     <th>Vendor</th>
                     <th>Category</th>
+                    <th>Cost Center</th>
+                    <th>Room Type</th>
                     <th>Size / Spec</th>
                     <th>Unit</th>
-                    <th>Par / Room</th>
+                    <th>POR</th>
+                    <th>PAR</th>
                     <th>Min Stock</th>
+                    <th>Suggested Restock Quantity</th>
+                    <th>Lead Time</th>
                     <th>On-hand</th>
                     <th>Mandatory</th>
                     <th>Status</th>
@@ -283,7 +358,7 @@
             </div>
           </div>
 
-          <div class="card card--dense">
+          <div class="card card--dense" id="movementListsCard">
 
           <div class="movement-panel" data-record-panel="IN">
             <div class="page-header movement-section-header">
@@ -359,47 +434,170 @@
             </div>
           </div>
 
-          <div class="card">
-            <div class="page-header" style="margin-bottom:8px;">
-              <div>
-                <h3 style="margin:0;">Movement History</h3>
-                <p class="header__subtitle">View, modify, discard, revert, or re-open movements.</p>
-              </div>
-              <div class="filters-row" style="margin:0;">
-                <div class="filter-group">
-                  <select id="movementDirectionFilter" class="input">
-                    <option value="ALL">All</option>
-                    <option value="IN">Incoming</option>
-                    <option value="OUT">Outgoing</option>
-                  </select>
+          <div class="movement-panel hidden" data-record-panel="HISTORY">
+            <div class="card">
+              <div class="page-header" style="margin-bottom:8px;">
+                <div>
+                  <h3 style="margin:0;">Movement History</h3>
+                  <p class="header__subtitle">View, modify, discard, revert, or re-open movements.</p>
                 </div>
-                <div class="filter-group">
-                  <input id="movementSearchInput" class="input" placeholder="Search ID or property" />
+                <div class="filters-row" style="margin:0;">
+                  <div class="filter-group">
+                    <select id="movementDirectionFilter" class="input">
+                      <option value="ALL">All</option>
+                      <option value="IN">Incoming</option>
+                      <option value="OUT">Outgoing</option>
+                    </select>
+                  </div>
+                  <div class="filter-group">
+                    <input id="movementSearchInput" class="input" placeholder="Search ID or property" />
+                  </div>
                 </div>
               </div>
-            </div>
-            <div class="table-wrapper">
-              <table>
-                <thead>
-              <tr>
-                <th>ID</th>
-                <th>Direction</th>
+              <div class="table-wrapper">
+                <table>
+                  <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Direction</th>
                 <th>Date</th>
                 <th>Property</th>
                 <th>Note</th>
                 <th>Status</th>
                 <th>Lines</th>
                 <th>Total Qty</th>
+                <th>On-hand Stock</th>
                 <th class="table-actions-col">Actions</th>
               </tr>
                 </thead>
                 <tbody id="movementHistoryTableBody"></tbody>
               </table>
+              </div>
+              <div class="pagination">
+                <button id="movementPrevPage" class="btn btn-secondary btn-sm">Prev</button>
+                <span id="movementPageInfo" class="info-text"></span>
+                <button id="movementNextPage" class="btn btn-secondary btn-sm">Next</button>
+              </div>
             </div>
-            <div class="pagination">
-              <button id="movementPrevPage" class="btn btn-secondary btn-sm">Prev</button>
-              <span id="movementPageInfo" class="info-text"></span>
-              <button id="movementNextPage" class="btn btn-secondary btn-sm">Next</button>
+          </div>
+        </section>
+
+        <!-- Inventory Journal Page -->
+        <section id="page-inventory-journal" class="page">
+          <div class="page-header">
+            <div>
+              <h2>Inventory Journal</h2>
+              <p class="header__subtitle">Review and manage purchase expense journals from incoming movements.</p>
+            </div>
+            <div class="movement-actions">
+              <button id="btnJournalDownload" class="btn btn-secondary btn-sm">Download CSV</button>
+              <button id="btnJournalPrint" class="btn btn-secondary btn-sm">Print</button>
+            </div>
+          </div>
+          <div class="filters-row">
+            <div class="filter-group">
+              <select id="journalPropertyFilter" class="input">
+                <option value="all">All Properties</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <select id="journalSourceFilter" class="input">
+                <option value="all">All Sources</option>
+                <option value="INCOMING">Incoming</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <select id="journalStatusFilter" class="input">
+                <option value="all">All Status</option>
+                <option value="POSTED">Posted</option>
+                <option value="REVERSED">Reversed</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <input id="journalDateFrom" type="date" class="input" placeholder="From" />
+            </div>
+            <div class="filter-group">
+              <input id="journalDateTo" type="date" class="input" placeholder="To" />
+            </div>
+            <div class="filter-group">
+              <input id="journalSearchInput" class="input" placeholder="Search Journal ID or Source Doc" />
+            </div>
+          </div>
+          <div class="card">
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th data-journal-sort="id">Journal ID</th>
+                    <th data-journal-sort="postingDate">Posting Date</th>
+                    <th>Property</th>
+                    <th>Source Type</th>
+                    <th>Source Doc ID</th>
+                    <th>Status</th>
+                    <th>Total Lines</th>
+                    <th class="table-actions-col">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="inventoryJournalTableBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- Inventory Ledger Page -->
+        <section id="page-inventory-ledger" class="page">
+          <div class="page-header">
+            <div>
+              <h2>Inventory Ledger</h2>
+              <p class="header__subtitle">Consolidated view of inventory movements by item and property.</p>
+            </div>
+            <div class="movement-actions">
+              <button id="btnLedgerDownload" class="btn btn-secondary btn-sm">Download CSV</button>
+              <button id="btnLedgerPrint" class="btn btn-secondary btn-sm">Print</button>
+            </div>
+          </div>
+          <div class="filters-row">
+            <div class="filter-group">
+              <select id="ledgerPropertyFilter" class="input">
+                <option value="all">All Properties</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <select id="ledgerItemFilter" class="input">
+                <option value="all">All Items</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <select id="ledgerTypeFilter" class="input">
+                <option value="all">All Types</option>
+                <option value="ROOM">Room</option>
+                <option value="LAUNDRY">Laundry</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <input id="ledgerDateFrom" type="date" class="input" placeholder="From" />
+            </div>
+            <div class="filter-group">
+              <input id="ledgerDateTo" type="date" class="input" placeholder="To" />
+            </div>
+          </div>
+          <div class="card">
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th data-ledger-sort="property">Property</th>
+                    <th data-ledger-sort="itemName">Item Name</th>
+                    <th>Inventory Type</th>
+                    <th>Opening Qty</th>
+                    <th>Incoming Qty</th>
+                    <th>Outgoing Qty</th>
+                    <th>Adjustment Qty</th>
+                    <th data-ledger-sort="closingQty">Closing Qty</th>
+                  </tr>
+                </thead>
+                <tbody id="inventoryLedgerTableBody"></tbody>
+              </table>
             </div>
           </div>
         </section>
@@ -440,10 +638,12 @@
                     <th>Type</th>
                     <th>On-hand</th>
                     <th>Min Stock</th>
+                    <th>Lead Time</th>
+                    <th>L30D ADU</th>
+                    <th>DOC (days)</th>
+                    <th>Suggested Reorder Quantity</th>
                     <th>Status</th>
                     <th>Mandatory</th>
-                    <th>Suggested Qty</th>
-                    <th>Last 7d Usage</th>
                   </tr>
                 </thead>
                 <tbody id="stockAlertTableBody">
@@ -711,7 +911,7 @@
                     </div>
                   </div>
                   <div class="repl-line-field">
-                    <label class="repl-line-label" for="replModalUsage">Last 7d Usage</label>
+                    <label class="repl-line-label" for="replModalUsage">L30D Usage</label>
                     <input id="replModalUsage" type="number" class="input" readonly />
                   </div>
                   <div class="repl-line-field">
@@ -732,7 +932,7 @@
                       <th>Unit</th>
                       <th>Qty</th>
                       <th>Department</th>
-                      <th>Last 7d Usage</th>
+                      <th>L30D Usage</th>
                       <th>Preview</th>
                       <th class="table-actions-col">Action</th>
                     </tr>
@@ -900,6 +1100,88 @@
 
   <!-- Modals -->
 
+  <!-- Property Asset Modal -->
+  <div id="modalPropertyAsset" class="modal hidden">
+    <div class="modal__backdrop"></div>
+    <div class="modal__content">
+      <div class="modal__header">
+        <h3 id="modalPropertyAssetTitle">Add Property Asset</h3>
+        <button class="modal__close" data-close-modal="modalPropertyAsset">&times;</button>
+      </div>
+      <div class="modal__body">
+        <form id="propertyAssetForm">
+          <input type="hidden" id="propertyAssetId" />
+          <div class="form-grid">
+            <div class="form-group">
+              <label for="propertyAssetName">Asset Name</label>
+              <input id="propertyAssetName" class="input" placeholder="e.g. Monitor" />
+            </div>
+            <div class="form-group">
+              <label for="propertyAssetCategory">Category</label>
+              <select id="propertyAssetCategory" class="input">
+                <option value="IT Equipment">IT Equipment</option>
+                <option value="Office Equipment">Office Equipment</option>
+                <option value="Payment Device">Payment Device</option>
+                <option value="Network">Network</option>
+                <option value="Security">Security</option>
+                <option value="Other">Other</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="propertyAssetVendor">Vendor</label>
+              <input id="propertyAssetVendor" class="input" placeholder="e.g. PT Techindo" />
+            </div>
+            <div class="form-group">
+              <label for="propertyAssetUnit">Unit</label>
+              <select id="propertyAssetUnit" class="input"></select>
+            </div>
+            <div class="form-group">
+              <label for="propertyAssetQtyGood">Good Qty</label>
+              <input id="propertyAssetQtyGood" type="number" min="0" class="input" value="1" />
+            </div>
+            <div class="form-group">
+              <label for="propertyAssetQtyNeedsService">Needs Service Qty</label>
+              <input id="propertyAssetQtyNeedsService" type="number" min="0" class="input" value="0" />
+            </div>
+            <div class="form-group">
+              <label for="propertyAssetQtyDamaged">Damaged Qty</label>
+              <input id="propertyAssetQtyDamaged" type="number" min="0" class="input" value="0" />
+            </div>
+            <div class="form-group">
+              <label for="propertyAssetQtyTotal">Total Qty</label>
+              <input id="propertyAssetQtyTotal" type="number" class="input" readonly />
+            </div>
+            <div class="form-group">
+              <label for="propertyAssetStatus">Status</label>
+              <select id="propertyAssetStatus" class="input">
+                <option value="ACTIVE">Active</option>
+                <option value="IN_REPAIR">In Repair</option>
+                <option value="ARCHIVED">Archived</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="propertyAssetLocation">Location</label>
+              <input id="propertyAssetLocation" class="input" placeholder="e.g. Front Desk" />
+            </div>
+            <div class="form-group">
+              <label for="propertyAssetCostCenter">Cost Center</label>
+              <select id="propertyAssetCostCenter" class="input">
+                <option value="Housekeeping">Housekeeping</option>
+                <option value="Laundry">Laundry</option>
+                <option value="Engineering">Engineering</option>
+                <option value="General">General</option>
+              </select>
+            </div>
+          </div>
+        </form>
+      </div>
+      <div class="modal__footer">
+        <button class="btn btn-secondary" data-close-modal="modalPropertyAsset">Cancel</button>
+        <button id="btnSavePropertyAsset" class="btn btn-primary">Save</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Room Item Modal -->
   <div id="modalRoomItem" class="modal hidden">
     <div class="modal__backdrop"></div>
@@ -927,8 +1209,25 @@
               </select>
             </div>
             <div class="form-group">
+              <label for="roomItemCostCenter">Cost Center</label>
+              <select id="roomItemCostCenter" class="input">
+                <option value="Housekeeping">Housekeeping</option>
+                <option value="Laundry">Laundry</option>
+                <option value="Engineering">Engineering</option>
+                <option value="General">General</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="roomItemRoomType">Room Type</label>
+              <select id="roomItemRoomType" class="input" multiple></select>
+            </div>
+            <div class="form-group">
               <label for="roomItemUnit">Unit</label>
               <select id="roomItemUnit" class="input"></select>
+            </div>
+            <div class="form-group">
+              <label for="roomItemUnitCost">Unit Cost (IDR)</label>
+              <input id="roomItemUnitCost" type="number" class="input" min="0" step="1" placeholder="e.g. 3000" />
             </div>
             <div class="form-group">
               <label class="checkbox-label">
@@ -937,8 +1236,14 @@
               </label>
             </div>
             <div class="form-group">
-              <label for="roomParPerRoom">Par per Room</label>
-              <input id="roomParPerRoom" type="number" class="input" min="0" value="0" />
+              <label class="checkbox-label">
+                <input id="roomItemSuggestHousekeeping" type="checkbox" />
+                Suggest on Housekeeping Task
+              </label>
+            </div>
+            <div class="form-group">
+              <label for="roomPor">POR (Per Occupied Room)</label>
+              <input id="roomPor" type="number" class="input" min="0" value="0" />
             </div>
             <div class="form-group">
               <label for="roomMinStock">Min Stock</label>
@@ -947,6 +1252,10 @@
             <div class="form-group">
               <label for="roomMaxStock">Max Stock</label>
               <input id="roomMaxStock" type="number" class="input" min="0" value="0" />
+            </div>
+            <div class="form-group">
+              <label for="roomLeadTimeDays">Lead Time</label>
+              <input id="roomLeadTimeDays" type="number" class="input" min="0" value="0" />
             </div>
             <div class="form-group form-group--full">
               <p class="info-text" id="roomOnHandInfo">Current On Hand: 0 (read-only; updated via movements/opname).</p>
@@ -989,6 +1298,19 @@
               </select>
             </div>
             <div class="form-group">
+              <label for="laundryItemCostCenter">Cost Center</label>
+              <select id="laundryItemCostCenter" class="input">
+                <option value="Laundry">Laundry</option>
+                <option value="Housekeeping">Housekeeping</option>
+                <option value="Engineering">Engineering</option>
+                <option value="General">General</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="laundryItemRoomType">Room Type</label>
+              <select id="laundryItemRoomType" class="input" multiple></select>
+            </div>
+            <div class="form-group">
               <label for="laundryItemSize">Size / Spec</label>
               <input id="laundryItemSize" class="input" placeholder="e.g. 160x200cm, 500gsm" />
             </div>
@@ -997,18 +1319,30 @@
               <select id="laundryItemUnit" class="input"></select>
             </div>
             <div class="form-group">
+              <label for="laundryItemUnitCost">Unit Cost (IDR)</label>
+              <input id="laundryItemUnitCost" type="number" class="input" min="0" step="1" placeholder="e.g. 25000" />
+            </div>
+            <div class="form-group">
               <label class="checkbox-label">
                 <input id="laundryItemMandatory" type="checkbox" />
                 Mandatory Item
               </label>
             </div>
             <div class="form-group">
-              <label for="laundryParPerRoom">Par per Room</label>
+              <label for="laundryPor">POR (Per Occupied Room)</label>
+              <input id="laundryPor" type="number" class="input" min="0" value="0" />
+            </div>
+            <div class="form-group">
+              <label for="laundryParPerRoom">PAR</label>
               <input id="laundryParPerRoom" type="number" class="input" min="0" value="0" />
             </div>
             <div class="form-group">
               <label for="laundryMinStock">Min Stock</label>
               <input id="laundryMinStock" type="number" class="input" min="0" value="0" />
+            </div>
+            <div class="form-group">
+              <label for="laundryLeadTimeDays">Lead Time</label>
+              <input id="laundryLeadTimeDays" type="number" class="input" min="0" value="0" />
             </div>
             <div class="form-group form-group--full">
               <p class="info-text" id="laundryOnHandInfo">Current On Hand: 0 (read-only; updated via movements/opname).
@@ -1103,6 +1437,7 @@
       </div>
       <div class="modal__body">
         <p id="movementDetailMeta" class="info-text"></p>
+        <p id="movementDiscardReason" class="info-text hidden"></p>
         <div class="table-wrapper">
           <table>
             <thead>
@@ -1140,6 +1475,51 @@
       </div>
       <div class="modal__footer">
         <button class="btn btn-secondary" data-close-modal="modalDocPreview">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Journal Detail Modal -->
+  <div id="modalJournalDetail" class="modal hidden">
+    <div class="modal__backdrop"></div>
+    <div class="modal__content modal__content--wide">
+      <div class="modal__header">
+        <h3 id="journalDetailTitle">Journal Detail</h3>
+        <button class="modal__close" data-close-modal="modalJournalDetail">&times;</button>
+      </div>
+      <div class="modal__body">
+        <p id="journalDetailMeta" class="info-text"></p>
+        <p id="journalDetailReversalReason" class="info-text hidden"></p>
+        <div style="margin:6px 0;">
+          <span id="journalDetailStatus" class="badge badge--draft">Draft</span>
+        </div>
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                <th>Line</th>
+                <th>Debit Account</th>
+                <th>Debit Amount</th>
+                <th>Credit Account</th>
+                <th>Credit Amount</th>
+                <th>Item</th>
+                <th>Qty</th>
+                <th>Unit</th>
+                <th>Cost Center</th>
+              </tr>
+                </thead>
+                <tbody id="journalDetailLines"></tbody>
+              </table>
+            </div>
+            <div class="journal-totals" style="display:flex; gap:12px; margin-top:10px; align-items:center;">
+              <span id="journalTotalDebit" class="info-text"></span>
+              <span id="journalTotalCredit" class="info-text"></span>
+              <span id="journalBalanceWarning" class="badge badge--rejected hidden">⚠ Out of balance</span>
+            </div>
+      </div>
+      <div class="modal__footer">
+        <div style="flex:1"></div>
+        <button class="btn btn-secondary" data-close-modal="modalJournalDetail">Close</button>
       </div>
     </div>
   </div>

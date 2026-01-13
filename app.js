@@ -11,6 +11,7 @@ const UOMS = [
   { code: 'L', label: 'Liter (L)' },
   { code: 'ML', label: 'Milliliter (ML)' }
 ];
+const ROOM_TYPES = ['Family Room','Queen Room','Twin Room','Deluxe Room','Suite'];
 const MOVEMENT_PAGE_SIZE = 5;
 const INCOMING_PAGE_SIZE = 5;
 const OUTGOING_PAGE_SIZE = 5;
@@ -57,18 +58,26 @@ const PR_STATUS_META = {
   APPROVED: { label: 'APPROVED', className: 'badge--waiting-po', subtitle: 'Approved (legacy state)' }
 };
 
+const PROPERTY_LIST = [
+  'Urbanview Jakarta Sudirman',
+  'RedDoorz Plus @ Dago Bandung',
+  'Sans Hotel Jakarta Thamrin'
+];
+
 const state = {
-  activePage: 'room-inventory',
+  activePage: 'property-inventory',
   selectedProperty: 'Urbanview Jakarta Sudirman',
   currentUser: PROFILES[0],
   roomInventoryItems: [],
   laundryInventoryItems: [],
+  propertyInventoryRecords: [],
+  inventoryJournals: [],
   stockOpnameSessions: [],
   stockOpnameLines: {},
   replenishmentRequests: [],
   incomingDocs: [],
   outgoingDocs: [],
-  nextIds: { roomItem: 1, laundryItem: 1, stockOpname: 1, repl: 1, replLine: 1 }
+  nextIds: { roomItem: 1, laundryItem: 1, propertyAsset: 1, stockOpname: 1, repl: 1, replLine: 1 }
 };
 
 let currentOpnameSessionId = null;
@@ -103,20 +112,39 @@ let alertPage = 1;
 let opnamePage = 1;
 let replPage = 1;
 let stockOnHandPage = 1;
+let propertyInventoryPage = 1;
+let journalSort = { field: 'postingDate', direction: 'desc' };
+let ledgerSort = { field: 'itemName', direction: 'asc' };
+let currentJournalId = null;
 
 function ensureSeeded(){
   if(hasSeeded) return;
   seedDummyData();
+  ensureItemUnitCosts();
+  ensurePorDefaults();
   hasSeeded = true;
 }
 
 /* Utilities */
 function safeNumber(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
+function displayLeadTime(val){
+  if(val === undefined || val === null || val === '') return '-';
+  const n = Number(val);
+  return Number.isFinite(n) ? n : '-';
+}
 function nextReplId() { return 'PR-' + String(state.nextIds.repl++).padStart(3, '0'); }
 function nextReplLineId() { return 'RL-' + state.nextIds.replLine++; }
+function nextPropertyAssetId() { return 'PA-' + String(state.nextIds.propertyAsset++).padStart(4, '0'); }
 function nextIncomingId() { return 'IN-' + String(state.incomingDocs.length + 1).padStart(4, '0'); }
 function nextOutgoingId() { return 'OUT-' + String(state.outgoingDocs.length + 1).padStart(4, '0'); }
 function nextStockOpnameId() { return 'OP-' + String(state.nextIds.stockOpname++).padStart(3, '0'); }
+function nextJournalId(){
+  const max = state.inventoryJournals.reduce((acc, j) => {
+    const num = Number(String(j.id || '').replace(/\D/g, ''));
+    return Number.isFinite(num) ? Math.max(acc, num) : acc;
+  }, 0);
+  return 'JRN-' + String(max + 1).padStart(4, '0');
+}
 function getUomLabel(code) { const found = UOMS.find(u => u.code === code); return found ? found.label : code || '-'; }
 function getItemVendorMeta(itemId){
   return ITEM_VENDOR_META[itemId] || { code: (itemId || '000').replace(/[^A-Za-z0-9]/g,'').slice(0,3).padEnd(3,'0'), vendor: 'PT Demo Vendor' };
@@ -153,6 +181,108 @@ function categoryForProcItem(name){
   return '';
 }
 function formatProcItemOption(p){ return `${p.code} - ${p.name}${p.vendor ? ' - ' + p.vendor : ''}`; }
+function downloadCsv(filename, columns, rows){
+  const headers = (columns || []).map(c => `"${String(c.header || '').replace(/"/g,'""')}"`).join(',');
+  const body = (rows || []).map(row => (columns || []).map(col => {
+    const val = typeof col.accessor === 'function' ? col.accessor(row) : (row[col.accessor] ?? '');
+    return `"${String(val === undefined || val === null ? '' : val).replace(/"/g,'""')}"`;
+  }).join(',')).join('\n');
+  const csv = [headers, body].filter(Boolean).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename || 'export.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+function ensureItemUnitCosts(){
+  const ranges = [
+    { match: ['amenity','amenities','disposable','tissue'], cost: 5000 },
+    { match: ['water','beverage','drink'], cost: 3000 },
+    { match: ['bedsheet','linen','duvet','pillowcase'], cost: 85000 },
+    { match: ['towel','bath'], cost: 45000 }
+  ];
+  const assignCost = (item)=>{
+    if(Number.isFinite(item.unitCost)) return;
+    const nameLower = (item.name || '').toLowerCase();
+    const catLower = (item.category || '').toLowerCase();
+    const found = ranges.find(r => r.match.some(k => nameLower.includes(k) || catLower.includes(k)));
+    item.unitCost = found ? found.cost : 10000;
+  };
+  state.roomInventoryItems.forEach(assignCost);
+  state.laundryInventoryItems.forEach(assignCost);
+}
+function ensurePorDefaults(){
+  state.roomInventoryItems.forEach(item => {
+    item.por = safeNumber(item.por);
+    if(item.por < 0) item.por = 0;
+  });
+  state.laundryInventoryItems.forEach(item => {
+    item.por = safeNumber(item.por);
+    if(item.por < 0) item.por = 0;
+  });
+}
+function resolveUnitCost(itemId, type){
+  let item = getInventoryItemWithType(itemId, type);
+  if(!item){
+    item = getCombinedInventory().find(i=>i.id===itemId);
+  }
+  if(item && Number.isFinite(item.unitCost)) return item.unitCost;
+  return 0;
+}
+function resolveLineUnitCost(line){
+  const lineCost = safeNumber(line.unitCost);
+  if(Number.isFinite(lineCost) && lineCost > 0) return lineCost;
+  return resolveUnitCost(line.itemId, line.type);
+}
+function normalizeJournalAmounts(){
+  state.inventoryJournals.forEach(j=>{
+    (j.lines || []).forEach(ln=>{
+      const resolvedUnitCost = resolveLineUnitCost(ln);
+      if(!Number.isFinite(ln.unitCost) || ln.unitCost <= 0) ln.unitCost = resolvedUnitCost;
+      if(!Number.isFinite(ln.amount) || ln.amount === null){
+        const qty = safeNumber(ln.qty || 1);
+        ln.amount = safeNumber(resolvedUnitCost) * qty;
+      }
+    });
+  });
+}
+function normalizeJournalState(){
+  state.inventoryJournals.forEach(j=>{
+    if(!j.status || j.status === 'DRAFT'){
+      j.status = 'POSTED';
+      if(!j.postedBy) j.postedBy = j.createdBy || state.currentUser.name;
+      if(!j.postedAt) j.postedAt = j.createdAt || j.postingDate || new Date().toISOString();
+    }
+  });
+}
+function formatCurrency(num){
+  const n = safeNumber(num);
+  const sign = n < 0 ? '-' : '';
+  const abs = Math.abs(n);
+  return `Rp ${sign}${abs.toLocaleString('id-ID')}`;
+}
+function formatLocalDateTime(value){
+  if(!value) return '-';
+  let d;
+  if(typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)){
+    const [year, month, day] = value.split('-').map(Number);
+    d = new Date(year, month - 1, day);
+  } else {
+    d = new Date(value);
+  }
+  if(Number.isNaN(d.getTime())) return String(value);
+  const pad = (n)=>String(n).padStart(2, '0');
+  const dd = pad(d.getDate());
+  const mm = pad(d.getMonth() + 1);
+  const yyyy = d.getFullYear();
+  const hh = pad(d.getHours());
+  const min = pad(d.getMinutes());
+  return `${dd}-${mm}-${yyyy} ${hh}:${min}`;
+}
 function ensureReplenishmentDefaults(req){
   if(!req) return;
   req.poList = Array.isArray(req.poList) ? req.poList : [];
@@ -285,6 +415,49 @@ function initUomSelect(selectId) {
   });
 }
 
+function initRoomTypeSelect(selectId){
+  const sel = document.getElementById(selectId);
+  if(!sel) return;
+  sel.innerHTML = '';
+  ROOM_TYPES.forEach(rt => {
+    const opt = document.createElement('option');
+    opt.value = rt;
+    opt.textContent = rt;
+    sel.appendChild(opt);
+  });
+}
+
+function getMultiSelectValues(sel){
+  if(!sel) return [];
+  return Array.from(sel.selectedOptions || []).map(o => o.value).filter(Boolean);
+}
+
+function setMultiSelectValues(sel, values){
+  if(!sel) return;
+  const set = new Set(values || []);
+  Array.from(sel.options || []).forEach(opt => {
+    opt.selected = set.has(opt.value);
+  });
+}
+
+function enableMultiSelectClick(selectId){
+  const sel = document.getElementById(selectId);
+  if(!sel || !sel.multiple) return;
+  sel.addEventListener('mousedown', e => {
+    if(e.target.tagName !== 'OPTION') return;
+    e.preventDefault();
+    const opt = e.target;
+    opt.selected = !opt.selected;
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+}
+
+function formatRoomTypes(val){
+  if (Array.isArray(val) && val.length) return val.join(', ');
+  if (typeof val === 'string' && val.trim()) return val;
+  return '-';
+}
+
 function deleteReplenishment(id){
   const req = state.replenishmentRequests.find(r=>r.id===id);
   if(!req) return;
@@ -304,7 +477,11 @@ function printReplenishment(id){
   setTimeout(()=>window.print(), 150);
 }
 function getInventoryItemWithType(id, type) { return type === 'ROOM' ? state.roomInventoryItems.find(i => i.id === id) : state.laundryInventoryItems.find(i => i.id === id); }
-function getCombinedInventory() { return [...state.roomInventoryItems.map(i => ({ ...i, type: 'ROOM' })), ...state.laundryInventoryItems.map(i => ({ ...i, type: 'LAUNDRY' }))]; }
+function getCombinedInventory() {
+  const rooms = state.roomInventoryItems.map(i => ({ ...i, type: 'ROOM' }));
+  const laundry = state.laundryInventoryItems.map(i => ({ ...i, type: 'LAUNDRY' }));
+  return [...rooms, ...laundry];
+}
 function defaultUomCode() { return (UOMS[0] && UOMS[0].code) || 'PCS'; }
 function isCurrentUserPropertyPIC(){ return state.currentUser.role === 'Property PIC'; }
 function showToast(msg) { const t = document.getElementById('toast'); if (!t) return; t.textContent = msg; t.classList.remove('hidden'); setTimeout(() => t.classList.add('hidden'), 2000); }
@@ -328,11 +505,337 @@ function addMovementLog(doc, action, detail) {
   doc.history = doc.history || [];
   doc.history.push({ ts: new Date().toISOString(), action, detail, snapshot: snapshotDoc(doc) });
 }
-function computeLast7dUsage(itemId, type){
+
+/* External task POR consumption */
+function resolveInventoryForTaskItem(ref, defaultType){
+  if(!ref) return null;
+  const combined = getCombinedInventory();
+  const refType = ref.inventoryType || ref.type || defaultType;
+  const id = ref.itemId || ref.id;
+  if(id){
+    const byId = combined.find(i => i.id === id && (!refType || i.type === refType));
+    if(byId) return byId;
+  }
+  const name = (ref.itemName || ref.name || '').toLowerCase();
+  if(name){
+    const byName = combined.find(i => i.name.toLowerCase() === name && (!refType || i.type === refType));
+    if(byName) return byName;
+  }
+  return null;
+}
+function buildPorConsumptionLines(tasks){
+  const map = new Map();
+  tasks.forEach(task => {
+    if(!task) return;
+    const taskCount = Math.max(1, safeNumber(task.taskCount ?? task.count ?? task.quantity ?? task.occupiedRooms ?? 1));
+    const refs = Array.isArray(task.items) && task.items.length
+      ? task.items
+      : [{ itemId: task.itemId, itemName: task.itemName, inventoryType: task.inventoryType }];
+    refs.forEach(ref => {
+      if(!ref) return;
+      const inv = resolveInventoryForTaskItem(ref, task.inventoryType);
+      if(!inv) return;
+      const por = safeNumber(inv.por);
+      if(por <= 0) return;
+      const qty = por * taskCount;
+      const type = inv.type || ref.inventoryType || task.inventoryType || 'ROOM';
+      const key = `${type}|${inv.id}`;
+      const base = map.get(key) || { itemId: inv.id, itemName: inv.name, type, uom: inv.unit, qty: 0 };
+      base.qty += qty;
+      map.set(key, base);
+    });
+  });
+  return Array.from(map.values());
+}
+function recordExternalTaskUsage(taskPayload){
+  ensureSeeded();
+  const tasks = Array.isArray(taskPayload) ? taskPayload : [taskPayload || {}];
+  const lines = buildPorConsumptionLines(tasks);
+  if(!lines.length) return showToast('No POR-configured items matched external task');
+  const base = tasks[0] || {};
+  const doc = {
+    id: nextOutgoingId(),
+    date: new Date().toISOString().slice(0,10),
+    property: state.selectedProperty,
+    destType: 'EXTERNAL_TASK',
+    destRef: base.taskType || base.destRef || 'External Task',
+    note: base.note || 'Auto deduction via POR',
+    lines,
+    history: []
+  };
+  postMovement(doc, 'OUT');
+  showToast('External task recorded and stock deducted');
+}
+function bindExternalTaskBridge(){
+  window.RedIMSExternal = window.RedIMSExternal || {};
+  window.RedIMSExternal.recordTaskUsage = recordExternalTaskUsage;
+  window.addEventListener('message', (event)=>{
+    const data = event.data;
+    if(!data || typeof data !== 'object') return;
+    if(data.type === 'REDIMS_EXTERNAL_TASK'){
+      recordExternalTaskUsage(data.payload || data.task || data);
+    }
+  });
+  window.addEventListener('redims:external-task', (event)=>{
+    if(!event || !event.detail) return;
+    recordExternalTaskUsage(event.detail);
+  });
+}
+
+/* Journaling helpers */
+const CLEARING_ACCOUNT = 'PT. Reddoorz Management Indonesia';
+function resolveExpenseAccountForItem(item){
+  const category = ((item && item.category) || '').toLowerCase();
+  const name = ((item && item.name) || '').toLowerCase();
+  const combined = `${category} ${name}`;
+  if(combined.includes('amenity') || combined.includes('amenities') || combined.includes('guest')) return 'HK Supplies Expense';
+  if(combined.includes('linen') || combined.includes('towel') || combined.includes('bedsheet')) return 'Laundry Linen Expense';
+  if(combined.includes('clean') || combined.includes('chemical')) return 'Cleaning Chemicals Expense';
+  return 'Operating Supplies Expense';
+}
+function resolveCostCenterForItem(item){
+  const category = ((item && item.category) || '').toLowerCase();
+  const name = ((item && item.name) || '').toLowerCase();
+  const combined = `${category} ${name}`;
+  if(combined.includes('linen') || combined.includes('towel') || combined.includes('bedsheet')) return 'Laundry';
+  if(combined.includes('amenity') || combined.includes('amenities') || combined.includes('guest')) return 'Housekeeping';
+  if(combined.includes('tool') || combined.includes('maintenance') || combined.includes('engineering') || combined.includes('repair')) return 'Engineering';
+  return 'General';
+}
+
+function buildIncomingJournalLines(movementDoc){
+  if(!movementDoc) return [];
+  return (movementDoc.lines || []).map((ln, idx) => {
+    const inventoryItem = getInventoryItemWithType(ln.itemId, ln.type) || getCombinedInventory().find(i=>i.id===ln.itemId);
+    const itemForMapping = inventoryItem || { name: ln.itemName || '', category: '' };
+    const resolvedCostCenter = (inventoryItem && inventoryItem.costCenter) || resolveCostCenterForItem(itemForMapping);
+    const debitAccount = resolvedCostCenter;
+    const creditAccount = CLEARING_ACCOUNT;
+    const qty = safeNumber(ln.qty);
+    const unitCost = safeNumber(resolveLineUnitCost(ln));
+    const amount = safeNumber(unitCost) * qty;
+    return {
+      lineNo: idx + 1,
+      debitAccount,
+      creditAccount,
+      qty,
+      unit: ln.uom || (inventoryItem && inventoryItem.unit) || null,
+      unitCost,
+      amount,
+      itemId: ln.itemId || null,
+      itemName: (inventoryItem && inventoryItem.name) || ln.itemName || null,
+      costCenter: resolvedCostCenter
+    };
+  });
+}
+
+function createJournalFromIncoming(movementDoc){
+  if(!movementDoc) return null;
+  const lines = buildIncomingJournalLines(movementDoc);
+  const postedAt = new Date().toISOString();
+  const journal = {
+    id: nextJournalId(),
+    postingDate: movementDoc.date || new Date().toISOString().slice(0,10),
+    property: movementDoc.property || state.selectedProperty,
+    sourceDocType: 'INCOMING',
+    sourceDocId: movementDoc.id || '-',
+    status: 'POSTED',
+    createdBy: state.currentUser.name,
+    createdAt: postedAt,
+    postedBy: state.currentUser.name,
+    postedAt,
+    reversedBy: null,
+    reversedAt: null,
+    notes: movementDoc.note || null,
+    lines
+  };
+  state.inventoryJournals.push(journal);
+  return journal;
+}
+
+function createReversalJournalForIncoming(movementDoc, reason, discardedAt){
+  if(!movementDoc) return null;
+  const baseJournal = state.inventoryJournals.find(j=>j.sourceDocType === 'INCOMING' && j.sourceDocId === movementDoc.id && !j.isReversal);
+  const baseLines = (baseJournal && baseJournal.lines && baseJournal.lines.length) ? baseJournal.lines : buildIncomingJournalLines(movementDoc);
+  if(!baseLines.length) return null;
+  const timestamp = discardedAt || new Date().toISOString();
+  const reversal = {
+    id: nextJournalId(),
+    postingDate: timestamp,
+    property: movementDoc.property || state.selectedProperty,
+    sourceDocType: 'INCOMING',
+    sourceDocId: movementDoc.id || '-',
+    status: 'POSTED',
+    createdBy: state.currentUser.name,
+    createdAt: timestamp,
+    postedBy: state.currentUser.name,
+    postedAt: timestamp,
+    reversedBy: null,
+    reversedAt: null,
+    notes: baseJournal ? `Reversal of ${baseJournal.id}` : `Reversal of ${movementDoc.id || '-'}`,
+    isReversal: true,
+    reversalOf: baseJournal ? baseJournal.id : null,
+    lines: baseLines.map((ln, idx)=>({
+      lineNo: idx + 1,
+      debitAccount: ln.creditAccount,
+      creditAccount: ln.debitAccount,
+      qty: ln.qty,
+      unit: ln.unit || null,
+      unitCost: ln.unitCost ?? null,
+      amount: safeNumber(ln.amount),
+      itemId: ln.itemId || null,
+      itemName: ln.itemName || null,
+      costCenter: ln.costCenter || null
+    }))
+  };
+  state.inventoryJournals.push(reversal);
+  if(baseJournal){
+    baseJournal.status = 'REVERSED';
+    baseJournal.reversedBy = state.currentUser.name;
+    baseJournal.reversedAt = timestamp;
+    baseJournal.reversalReason = reason || null;
+  }
+  return reversal;
+}
+
+// Phase 1: outgoing journaling disabled (function retained for future use).
+function createJournalFromOutgoing(movementDoc){
+  if(!movementDoc) return null;
+  const debitAccount = (() => {
+    if(movementDoc.destType === 'COMPLIMENTARY') return 'Complimentary / Promo Expense';
+    if(movementDoc.destType === 'WASTAGE') return 'Wastage / Loss Expense';
+    if(movementDoc.destType === 'ADJUSTMENT') return 'Inventory Adjustment';
+    if(movementDoc.destType === 'DEPARTMENT') return `Dept Expense – ${movementDoc.destRef || 'Housekeeping'}`;
+    return 'Inventory Adjustment';
+  })();
+  const lines = (movementDoc.lines || []).map((ln, idx) => {
+    const qty = safeNumber(ln.qty);
+    const unitCost = resolveLineUnitCost(ln);
+    const amount = unitCost * qty;
+    return {
+      lineNo: idx + 1,
+      debitAccount,
+      creditAccount: 'Inventory',
+      qty,
+      unit: ln.uom || null,
+      unitCost,
+      amount,
+      itemId: ln.itemId || null,
+      itemName: ln.itemName || null,
+      costCenter: movementDoc.destRef || null
+    };
+  });
+  const postedAt = new Date().toISOString();
+  const journal = {
+    id: nextJournalId(),
+    postingDate: movementDoc.date || new Date().toISOString().slice(0,10),
+    property: movementDoc.property || state.selectedProperty,
+    sourceDocType: movementDoc.destType === 'ADJUSTMENT' ? 'ADJUSTMENT' : 'OUTGOING',
+    sourceDocId: movementDoc.id || '-',
+    status: 'POSTED',
+    createdBy: state.currentUser.name,
+    createdAt: postedAt,
+    postedBy: state.currentUser.name,
+    postedAt,
+    reversedBy: null,
+    reversedAt: null,
+    notes: movementDoc.note || null,
+    lines
+  };
+  state.inventoryJournals.push(journal);
+  return journal;
+}
+
+// Phase 1: opname journaling disabled (function retained for future use).
+function createJournalFromOpname(opnameSession, linesOverride){
+  if(!opnameSession) return null;
+  const linesData = linesOverride || state.stockOpnameLines[opnameSession.id] || [];
+  const lines = [];
+  linesData.forEach((ln, idx) => {
+    const variance = ln.varianceQty !== undefined ? safeNumber(ln.varianceQty) : safeNumber(ln.countedQty) - safeNumber(ln.systemQty);
+    if(!variance) return;
+    const isGain = variance > 0;
+    const debitAccount = isGain ? 'Inventory' : 'Inventory Shrinkage Expense';
+    const creditAccount = isGain ? 'Inventory Gain / Adjustment' : 'Inventory';
+    const unitCost = resolveUnitCost(ln.itemId, ln.type);
+    const amount = unitCost * Math.abs(variance);
+    lines.push({
+      lineNo: lines.length + 1,
+      debitAccount,
+      creditAccount,
+      qty: Math.abs(variance),
+      unit: ln.unit || ln.uom || null,
+      unitCost,
+      amount,
+      itemId: ln.itemId || null,
+      itemName: ln.itemName || null,
+      costCenter: null
+    });
+  });
+  if(!lines.length) return null;
+  const postedAt = new Date().toISOString();
+  const journal = {
+    id: nextJournalId(),
+    postingDate: opnameSession.scheduledDate || new Date().toISOString().slice(0,10),
+    property: state.selectedProperty,
+    sourceDocType: 'OPNAME',
+    sourceDocId: opnameSession.id || '-',
+    status: 'POSTED',
+    createdBy: state.currentUser.name,
+    createdAt: postedAt,
+    postedBy: state.currentUser.name,
+    postedAt,
+    reversedBy: null,
+    reversedAt: null,
+    notes: opnameSession.name || null,
+    lines
+  };
+  state.inventoryJournals.push(journal);
+  return journal;
+}
+
+// Phase 1: invoice journaling disabled (function retained for future use).
+function createJournalFromInvoice(purchaseRequest){
+  if(!purchaseRequest || !purchaseRequest.invoice) return null;
+  const inv = purchaseRequest.invoice || {};
+  const amount = safeNumber(inv.invoiceAmount);
+  const postedAt = new Date().toISOString();
+  const journal = {
+    id: nextJournalId(),
+    postingDate: inv.invoiceDate || new Date().toISOString().slice(0,10),
+    property: purchaseRequest.property || state.selectedProperty,
+    sourceDocType: 'PR_INVOICE',
+    sourceDocId: purchaseRequest.id || '-',
+    status: 'POSTED',
+    createdBy: state.currentUser.name,
+    createdAt: postedAt,
+    postedBy: state.currentUser.name,
+    postedAt,
+    reversedBy: null,
+    reversedAt: null,
+    notes: inv.note || null,
+    lines: [{
+      lineNo: 1,
+      debitAccount: 'AP – Vendor',
+      creditAccount: 'GRIR / Clearing',
+      qty: 1,
+      unit: null,
+      unitCost: amount,
+      amount: amount,
+      itemId: null,
+      itemName: null,
+      costCenter: null
+    }]
+  };
+  state.inventoryJournals.push(journal);
+  return journal;
+}
+function computeUsageForPastDays(itemId, type, days){
   const today = new Date();
-  const cutoff = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const cutoff = new Date(today.getTime() - days * 24 * 60 * 60 * 1000);
   return state.outgoingDocs.reduce((sum, doc) => {
-    if(doc.destType !== 'DEPARTMENT') return sum;
+    const allowedDest = ['DEPARTMENT','EXTERNAL_TASK'];
+    if(!allowedDest.includes(doc.destType)) return sum;
     if(!doc.date) return sum;
     const d = new Date(doc.date);
     if(isNaN(d.getTime()) || d < cutoff) return sum;
@@ -343,6 +846,24 @@ function computeLast7dUsage(itemId, type){
     });
     return sum;
   }, 0);
+}
+function computeLast7dUsage(itemId, type){
+  return computeUsageForPastDays(itemId, type, 7);
+}
+function computeAverageDailyUsage30d(itemId, type){
+  const total30d = computeUsageForPastDays(itemId, type, 30);
+  return total30d / 30;
+}
+function computeSuggestedRestockQuantity(item, type){
+  if(!item) return 0;
+  const minStock = safeNumber(item.minStock);
+  const onHand = safeNumber(item.onHand);
+  const leadTime = Math.max(safeNumber(item.leadTimeDays ?? item.leadTime ?? 0), 0);
+  const adu30 = computeAverageDailyUsage30d(item.id, type) || 0;
+  const minFillGap = Math.max(minStock - onHand, 0);
+  const leadCover = Math.ceil(leadTime * adu30);
+  const suggested = Math.max(minFillGap + leadCover, 0);
+  return Math.round(suggested);
 }
 function pushMovementDoc(doc, direction) {
   if (direction === 'IN') {
@@ -365,9 +886,22 @@ function postMovement(doc, direction) {
 }
 function discardMovement(doc, direction) {
   if (!doc || doc.status === 'DISCARDED') return;
+  let discardReason = '';
+  const discardedAt = new Date().toISOString();
+  if(direction === 'IN'){
+    discardReason = (prompt('Enter discard reason for this incoming (used for journal reversal):', '') || '').trim();
+    if(!discardReason) return showToast('Discard reason is required to discard incoming');
+    createReversalJournalForIncoming(doc, discardReason, discardedAt);
+  } else if (direction === 'OUT') {
+    discardReason = (prompt('Enter discard reason for this outgoing:', '') || '').trim();
+    if(!discardReason) return showToast('Discard reason is required to discard outgoing');
+  }
   adjustInventoryForDoc(doc, direction, -1);
   doc.status = 'DISCARDED';
-  addMovementLog(doc, 'Discarded', 'Movement discarded and stock reverted');
+  doc.discardedAt = discardedAt;
+  doc.discardReason = discardReason || null;
+  const logDetail = discardReason ? `Movement discarded: ${discardReason}` : 'Movement discarded and stock reverted';
+  addMovementLog(doc, 'Discarded', logDetail);
   movementHistoryPage = 1;
   renderAll();
 }
@@ -401,19 +935,31 @@ document.addEventListener('DOMContentLoaded', () => {
   renderPODatalist();
   bindNavigation();
   bindHeader();
+  initRoomTypeSelect('roomItemRoomType');
+  initRoomTypeSelect('laundryItemRoomType');
+  enableMultiSelectClick('roomItemRoomType');
+  enableMultiSelectClick('laundryItemRoomType');
   initUomSelect('roomItemUnit');
   initUomSelect('laundryItemUnit');
+  initUomSelect('propertyAssetUnit');
   initModals();
+  bindPropertyInventory();
   bindRoomInventory();
   bindLaundryInventory();
   bindStockAlert();
   bindStockOpname();
   bindReplenishment();
   bindStockMovements();
+  bindExternalTaskBridge();
   bindStockOnHand();
+  bindInventoryJournal();
+  bindInventoryLedger();
   bindAdjustStock();
   initProcurementLists();
   resetMovementForms();
+  state.activePage = 'property-inventory';
+  const initialNav = document.querySelector('.nav-item[data-page="property-inventory"]');
+  if(initialNav) setActiveNav(initialNav);
   try {
     renderAll();
   } catch (err) {
@@ -427,19 +973,20 @@ document.addEventListener('DOMContentLoaded', () => {
 function ensureSeeded(){
   if(hasSeeded) return;
   seedDummyData();
+  ensureItemUnitCosts();
   hasSeeded = true;
 }
 
 function seedDummyData() {
   state.roomInventoryItems = [
-    { id: 'R' + state.nextIds.roomItem++, name: 'Amenity Kit - Standard', category: 'Amenities', unit: 'PCS', mandatory: true, parPerRoom: 1, minStock: 200, maxStock: 600, onHand: 150, status: 'ACTIVE', vendor: 'PT Tirta Investama' },
-    { id: 'R' + state.nextIds.roomItem++, name: '600ml Mineral Water', category: 'Beverage', unit: 'PCS', mandatory: true, parPerRoom: 2, minStock: 400, maxStock: 1000, onHand: 380, status: 'ACTIVE', vendor: 'PT Tirta Investama' },
-    { id: 'R' + state.nextIds.roomItem++, name: 'Facial Tissue Box', category: 'Disposable', unit: 'BOX', mandatory: false, parPerRoom: 1, minStock: 120, maxStock: 400, onHand: 60, status: 'ACTIVE', vendor: 'PT Tisu Nusantara' }
+    { id: 'R' + state.nextIds.roomItem++, name: 'Amenity Kit - Standard', category: 'Amenities', costCenter: 'Housekeeping', roomTypes: ['Family Room'], unit: 'PCS', mandatory: true, por: 3, parPerRoom: 1, minStock: 200, maxStock: 600, onHand: 150, status: 'ACTIVE', vendor: 'PT Tirta Investama', unitCost: 5000, suggestHousekeepingTask: true, leadTimeDays: 7 },
+    { id: 'R' + state.nextIds.roomItem++, name: '600ml Mineral Water', category: 'Beverage', costCenter: 'General', roomTypes: ['Queen Room','Family Room'], unit: 'PCS', mandatory: true, por: 2, parPerRoom: 2, minStock: 400, maxStock: 1000, onHand: 380, status: 'ACTIVE', vendor: 'PT Tirta Investama', unitCost: 3000, suggestHousekeepingTask: true, leadTimeDays: 5 },
+    { id: 'R' + state.nextIds.roomItem++, name: 'Facial Tissue Box', category: 'Disposable', costCenter: 'General', roomTypes: ['Twin Room'], unit: 'BOX', mandatory: false, por: 1, parPerRoom: 1, minStock: 120, maxStock: 400, onHand: 60, status: 'ACTIVE', vendor: 'PT Tisu Nusantara', unitCost: 8000, suggestHousekeepingTask: false, leadTimeDays: 6 }
   ];
 
   state.laundryInventoryItems = [
-    { id: 'L' + state.nextIds.laundryItem++, name: 'Bedsheet Queen 300TC', category: 'Bedsheet', size: '160x200', unit: 'PCS', mandatory: true, parPerRoom: 2, minStock: 200, onHand: 180, status: 'ACTIVE', vendor: 'PT Linen Bersama' },
-    { id: 'L' + state.nextIds.laundryItem++, name: 'Bath Towel 500gsm', category: 'Bath Towel', size: '70x140', unit: 'PCS', mandatory: true, parPerRoom: 2, minStock: 300, onHand: 120, status: 'ACTIVE', vendor: 'PT Tekstil Sejahtera' }
+    { id: 'L' + state.nextIds.laundryItem++, name: 'Bedsheet Queen 300TC', category: 'Bedsheet', costCenter: 'Laundry', roomTypes: ['Queen Room'], size: '160x200', unit: 'PCS', mandatory: true, por: 1, parPerRoom: 2, minStock: 200, onHand: 180, status: 'ACTIVE', vendor: 'PT Linen Bersama', unitCost: 75000, leadTimeDays: 10 },
+    { id: 'L' + state.nextIds.laundryItem++, name: 'Bath Towel 500gsm', category: 'Bath Towel', costCenter: 'Laundry', roomTypes: ['Family Room','Twin Room'], size: '70x140', unit: 'PCS', mandatory: true, por: 2, parPerRoom: 2, minStock: 300, onHand: 120, status: 'ACTIVE', vendor: 'PT Tekstil Sejahtera', unitCost: 45000, leadTimeDays: 8 }
   ];
 
   // Make one item near critical to surface in Stock Alert
@@ -452,6 +999,8 @@ function seedDummyData() {
 
   const rr = nextReplId();
   state.replenishmentRequests.push({ id: rr, property: state.selectedProperty, requestorName: 'Arief Setiawan', requestorRole: 'Property PIC', createdAt: '2025-10-05', updatedAt: '2025-10-05', status: 'DRAFT', notes: 'Initial', approvals: buildApprovalChain(), poList: [], invoice: null, items: [ { id: nextReplLineId(), itemId: state.roomInventoryItems[0].id, itemName: state.roomInventoryItems[0].name, type: 'ROOM', currentStock: state.roomInventoryItems[0].onHand, minStock: state.roomInventoryItems[0].minStock, last7DayUsage: 80, suggestedQty: 100, requestedQty: 100, department: 'Housekeeping', mandatory: state.roomInventoryItems[0].mandatory, notes: '' } ] });
+
+  seedPropertyInventorySnapshot();
 
   PO_CATALOG = [
     {
@@ -475,6 +1024,61 @@ function seedDummyData() {
   ];
 }
 
+function seedPropertyInventorySnapshot(){
+  const assetCatalog = [
+    { name: 'Monitor', category: 'IT Equipment', vendor: 'PT Techindo', costCenter: 'General', unit: 'PCS', locations: ['Front Desk', 'Back Office'], baseQty: 4 },
+    { name: 'Printer', category: 'Office Equipment', vendor: 'PT Office Solutions', costCenter: 'General', unit: 'PCS', locations: ['Back Office'], baseQty: 1 },
+    { name: 'EDC Machine', category: 'Payment Device', vendor: 'PT Payment Nusantara', costCenter: 'General', unit: 'PCS', locations: ['Front Desk'], baseQty: 2 },
+    { name: 'Wifi Router', category: 'Network', vendor: 'PT Netlink', costCenter: 'Engineering', unit: 'PCS', locations: ['Lobby', 'Hallway'], baseQty: 3 },
+    { name: 'CCTV', category: 'Security', vendor: 'PT Security Vision', costCenter: 'Engineering', unit: 'PCS', locations: ['Entrance', 'Hallway'], baseQty: 8 }
+  ];
+  const now = Date.now();
+  const rows = [];
+  PROPERTY_LIST.forEach((property, pIdx) => {
+    assetCatalog.forEach((asset, idx) => {
+      const qty = Math.max(1, asset.baseQty + (pIdx % 2 === 0 ? 1 : -1));
+      const variance = (idx + pIdx) % 3;
+      let qtyGood = qty;
+      let qtyNeedsService = 0;
+      let qtyDamaged = 0;
+      if(variance === 1){
+        qtyNeedsService = qty > 1 ? 1 : qty;
+        qtyGood = Math.max(0, qty - qtyNeedsService);
+      } else if(variance === 2){
+        qtyDamaged = qty > 1 ? 1 : qty;
+        qtyGood = Math.max(0, qty - qtyDamaged);
+      }
+      let status = 'ACTIVE';
+      if((idx + pIdx) % 7 === 0){
+        status = 'ARCHIVED';
+      } else if(qtyDamaged > 0 || qtyNeedsService > 0){
+        status = 'IN_REPAIR';
+      }
+      const location = asset.locations[(pIdx + idx) % asset.locations.length];
+      const lastAudit = new Date(now - ((pIdx * 5 + idx) * 24 * 60 * 60 * 1000)).toISOString();
+      const tag = `PI-${String(pIdx + 1).padStart(2, '0')}-${String(idx + 1).padStart(2, '0')}`;
+      rows.push({
+        id: nextPropertyAssetId(),
+        property,
+        assetName: asset.name,
+        category: asset.category,
+        qty,
+        qtyGood,
+        qtyNeedsService,
+        qtyDamaged,
+        status,
+        location,
+        costCenter: asset.costCenter,
+        vendor: asset.vendor || '',
+        unit: asset.unit || 'PCS',
+        assetTag: tag,
+        lastAudit
+      });
+    });
+  });
+  state.propertyInventoryRecords = rows;
+}
+
 /* Rendering */
 function renderAll() {
   const safe = (fn) => { try { fn(); } catch (err) { console.error('Render error', fn.name, err); } };
@@ -482,7 +1086,10 @@ function renderAll() {
   const active = document.getElementById('page-' + state.activePage);
   if (active) active.classList.add('page--active');
   normalizeReplenishmentState();
+  normalizeJournalState();
+  normalizeJournalAmounts();
   [
+    renderPropertyInventoryPage,
     renderRoomInventoryTable,
     renderLaundryInventoryTable,
     renderStockAlertTable,
@@ -491,6 +1098,8 @@ function renderAll() {
     renderReplenishmentList,
     renderStockMovementsView,
     renderStockOnHand,
+    renderInventoryJournalPage,
+    renderInventoryLedgerPage,
     updateNewReplenishmentButton
   ].forEach(fn => safe(fn));
 }
@@ -646,28 +1255,33 @@ function renderRoomInventoryTable() {
   tbody.innerHTML = '';
   if(!slice.length){
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td colspan="11" style="text-align:center; color: var(--color-text-muted);">No room items</td>`;
+    tr.innerHTML = `<td colspan="16" style="text-align:center; color: var(--color-text-muted);">No room items</td>`;
     tbody.appendChild(tr);
   } else {
     slice.forEach(item => {
       const tr = document.createElement('tr');
+      const suggestedRestock = computeSuggestedRestockQuantity(item, 'ROOM');
       tr.innerHTML = `
         <td>${item.name}</td>
         <td>${item.vendor || '-'}</td>
         <td>${item.category}</td>
+        <td>${item.costCenter || '-'}</td>
+        <td>${formatRoomTypes(item.roomTypes || item.roomType)}</td>
         <td>${getUomLabel(item.unit)}</td>
         <td><span class="badge ${item.mandatory ? 'badge--yes' : 'badge--no'}">${item.mandatory ? 'Yes' : 'No'}</span></td>
-        <td>${item.parPerRoom ?? 0}</td>
+        <td><span class="badge ${item.suggestHousekeepingTask ? 'badge--yes' : 'badge--no'}">${item.suggestHousekeepingTask ? 'Yes' : 'No'}</span></td>
+        <td>${item.por ?? 0}</td>
         <td>${item.minStock}</td>
         <td>${item.maxStock ?? '-'}</td>
+        <td>${suggestedRestock}</td>
+        <td>${displayLeadTime(item.leadTimeDays ?? item.leadTime)}</td>
         <td>${item.onHand}</td>
         <td><span class="badge ${item.status === 'ACTIVE' ? 'badge--active' : 'badge--archived'}">${item.status}</span></td>
-        <td class="table-actions-col"><button class="btn btn-secondary btn-sm" data-action="edit">Edit</button> <button class="btn btn-secondary btn-sm" data-action="adjust">Adjust</button> <button class="btn btn-secondary btn-sm" data-action="archive">Archive</button></td>
+        <td class="table-actions-col"><button class="btn btn-secondary btn-sm" data-action="edit">Edit</button> <button class="btn btn-secondary btn-sm" data-action="archive">Archive</button></td>
       `;
       tr.querySelectorAll('button').forEach(btn => btn.addEventListener('click', () => {
         const action = btn.getAttribute('data-action');
         if (action === 'edit') openRoomItemModal(item.id);
-        if (action === 'adjust') openAdjustStockModal(item.id, 'ROOM');
         if (action === 'archive') { item.status = 'ARCHIVED'; showToast('Room item archived'); renderAll(); }
       }));
       tbody.appendChild(tr);
@@ -678,7 +1292,7 @@ function renderRoomInventoryTable() {
   const next = document.getElementById('roomInvNext'); if(next) next.disabled = roomPage >= totalPages;
 }
 
-function openRoomItemModal(id) { const modal = document.getElementById('modalRoomItem'); if (!modal) return; const title = document.getElementById('modalRoomTitle'); const form = document.getElementById('roomItemForm'); if (form) form.reset(); document.getElementById('roomItemId').value = id || ''; ensureProcurementOptions([document.getElementById('roomItemName')]); const onHandInfo = document.getElementById('roomOnHandInfo'); const customInput = document.getElementById('roomItemNameCustom'); if (id) { title.textContent = 'Edit Room Item'; const item = state.roomInventoryItems.find(i => i.id === id); if (!item) return; const proc = findProcItem(item.name); const nameSel = document.getElementById('roomItemName'); if(nameSel) nameSel.value = proc ? proc.name : ''; if(customInput) customInput.value = proc ? '' : item.name; document.getElementById('roomItemCategory').value = item.category; document.getElementById('roomItemUnit').value = item.unit || 'PCS'; document.getElementById('roomItemMandatory').checked = !!item.mandatory; document.getElementById('roomParPerRoom').value = item.parPerRoom ?? 0; document.getElementById('roomMinStock').value = item.minStock ?? 0; document.getElementById('roomMaxStock').value = item.maxStock ?? ''; if (onHandInfo) onHandInfo.textContent = `Current On Hand: ${item.onHand ?? 0}`; } else { title.textContent = 'Add Room Item'; if (onHandInfo) onHandInfo.textContent = 'Current On Hand: 0'; document.getElementById('roomItemUnit').value = 'PCS'; const nameSel = document.getElementById('roomItemName'); if(nameSel) nameSel.value = ''; if(customInput) customInput.value = ''; } openModal('modalRoomItem'); }
+function openRoomItemModal(id) { const modal = document.getElementById('modalRoomItem'); if (!modal) return; const title = document.getElementById('modalRoomTitle'); const form = document.getElementById('roomItemForm'); if (form) form.reset(); document.getElementById('roomItemId').value = id || ''; ensureProcurementOptions([document.getElementById('roomItemName')]); const onHandInfo = document.getElementById('roomOnHandInfo'); const costCenterInput = document.getElementById('roomItemCostCenter'); const customInput = document.getElementById('roomItemNameCustom'); const suggestInput = document.getElementById('roomItemSuggestHousekeeping'); const roomTypeInput = document.getElementById('roomItemRoomType'); const leadTimeInput = document.getElementById('roomLeadTimeDays'); if (id) { title.textContent = 'Edit Room Item'; const item = state.roomInventoryItems.find(i => i.id === id); if (!item) return; const proc = findProcItem(item.name); const nameSel = document.getElementById('roomItemName'); if(nameSel) nameSel.value = proc ? proc.name : ''; if(customInput) customInput.value = proc ? '' : item.name; document.getElementById('roomItemCategory').value = item.category; if(costCenterInput) costCenterInput.value = item.costCenter || resolveCostCenterForItem(item); if(roomTypeInput) setMultiSelectValues(roomTypeInput, Array.isArray(item.roomTypes) ? item.roomTypes : (item.roomType ? [item.roomType] : [])); document.getElementById('roomItemUnit').value = item.unit || 'PCS'; document.getElementById('roomItemUnitCost').value = item.unitCost ?? 0; document.getElementById('roomItemMandatory').checked = !!item.mandatory; if(suggestInput) suggestInput.checked = !!item.suggestHousekeepingTask; document.getElementById('roomPor').value = item.por ?? 0; document.getElementById('roomMinStock').value = item.minStock ?? 0; document.getElementById('roomMaxStock').value = item.maxStock ?? ''; if(leadTimeInput) leadTimeInput.value = item.leadTimeDays ?? item.leadTime ?? 0; if (onHandInfo) onHandInfo.textContent = `Current On Hand: ${item.onHand ?? 0}`; } else { title.textContent = 'Add Room Item'; if (onHandInfo) onHandInfo.textContent = 'Current On Hand: 0'; document.getElementById('roomItemUnit').value = 'PCS'; document.getElementById('roomItemUnitCost').value = 0; document.getElementById('roomPor').value = 0; if(costCenterInput) costCenterInput.value = 'Housekeeping'; if(roomTypeInput) setMultiSelectValues(roomTypeInput, ROOM_TYPES.slice(0,1)); if(suggestInput) suggestInput.checked = true; if(leadTimeInput) leadTimeInput.value = 7; const nameSel = document.getElementById('roomItemName'); if(nameSel) nameSel.value = ''; if(customInput) customInput.value = ''; } openModal('modalRoomItem'); }
 
 function saveRoomItemFromModal() {
   const id = document.getElementById('roomItemId').value;
@@ -686,17 +1300,28 @@ function saveRoomItemFromModal() {
   const nameCustom = (document.getElementById('roomItemNameCustom') || {});
   const rawName = (nameSelect.value || '').trim() || (nameCustom.value || '').trim();
   const procItem = findProcItem(rawName);
+  const existingRoomItem = id ? state.roomInventoryItems.find(x => x.id === id) : null;
   const name = procItem ? procItem.name : rawName.replace(/^[0-9]{3}\s*-\s*/,'');
   if (!name) return showToast('Name required');
   const category = document.getElementById('roomItemCategory').value || '';
+  const costCenterRaw = (document.getElementById('roomItemCostCenter') || {}).value || '';
+  const costCenter = costCenterRaw || resolveCostCenterForItem({ name, category });
+  const roomTypeSelected = getMultiSelectValues(document.getElementById('roomItemRoomType'));
+  const roomTypes = roomTypeSelected.length ? roomTypeSelected : ROOM_TYPES.slice(0,1);
   const unit = document.getElementById('roomItemUnit').value || 'PCS';
   const mandatory = !!document.getElementById('roomItemMandatory').checked;
-  const parPerRoom = safeNumber(document.getElementById('roomParPerRoom').value);
+  const suggestHousekeepingTask = !!((document.getElementById('roomItemSuggestHousekeeping') || {}).checked);
+  const por = safeNumber(document.getElementById('roomPor').value);
   const minStock = safeNumber(document.getElementById('roomMinStock').value);
   const maxStockRaw = document.getElementById('roomMaxStock').value;
   const maxStock = maxStockRaw === '' ? undefined : safeNumber(maxStockRaw);
+  const leadTimeEl = document.getElementById('roomLeadTimeDays') || {};
+  const leadTimeRaw = leadTimeEl.value;
+  const leadTimeDays = leadTimeRaw === '' ? Math.max(safeNumber(existingRoomItem ? existingRoomItem.leadTimeDays ?? existingRoomItem.leadTime : 0), 0) : Math.max(safeNumber(leadTimeRaw), 0);
+  const unitCost = safeNumber((document.getElementById('roomItemUnitCost') || {}).value) || 0;
   const isProc = !!procItem;
 
+  if (por < 0) return showToast('POR must be 0 or greater');
   if (minStock < 0) return showToast('Min stock must be 0 or greater');
   if (mandatory && !isProc) return showToast('Select item from procurement list');
 
@@ -712,15 +1337,16 @@ function saveRoomItemFromModal() {
   }
 
   if (id) {
-    const it = state.roomInventoryItems.find(x => x.id === id);
+    const it = existingRoomItem;
     if (!it) return;
-    Object.assign(it, { name, category, unit, mandatory, parPerRoom, minStock, maxStock, vendor });
+    Object.assign(it, { name, category, costCenter, roomTypes, unit, mandatory, suggestHousekeepingTask, por, minStock, maxStock, vendor, unitCost, leadTimeDays });
     showToast('Room item updated');
   } else {
-    state.roomInventoryItems.push({ id: 'R' + state.nextIds.roomItem++, name, category, unit, mandatory, parPerRoom, minStock, maxStock, vendor, onHand: 0, status: 'ACTIVE' });
+    state.roomInventoryItems.push({ id: 'R' + state.nextIds.roomItem++, name, category, costCenter, roomTypes, unit, mandatory, suggestHousekeepingTask, por, minStock, maxStock, vendor, onHand: 0, status: 'ACTIVE', unitCost, leadTimeDays });
     showToast('Room item added');
   }
 
+  ensureItemUnitCosts();
   closeModal('modalRoomItem');
   renderAll();
 }
@@ -752,28 +1378,33 @@ function renderLaundryInventoryTable() {
   tbody.innerHTML = '';
   if(!slice.length){
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td colspan="11" style="text-align:center; color: var(--color-text-muted);">No laundry items</td>`;
+    tr.innerHTML = `<td colspan="16" style="text-align:center; color: var(--color-text-muted);">No laundry items</td>`;
     tbody.appendChild(tr);
   } else {
     slice.forEach(item => {
       const tr = document.createElement('tr');
+      const suggestedRestock = computeSuggestedRestockQuantity(item, 'LAUNDRY');
       tr.innerHTML = `
     <td>${item.name}</td>
     <td>${item.vendor || '-'}</td>
     <td>${item.category}</td>
+    <td>${item.costCenter || '-'}</td>
+    <td>${formatRoomTypes(item.roomTypes || item.roomType)}</td>
     <td>${item.size || '-'}</td>
     <td>${getUomLabel(item.unit)}</td>
+    <td>${item.por ?? 0}</td>
     <td>${item.parPerRoom ?? 0}</td>
     <td>${item.minStock}</td>
+    <td>${suggestedRestock}</td>
+    <td>${displayLeadTime(item.leadTimeDays ?? item.leadTime)}</td>
     <td>${item.onHand}</td>
     <td><span class="badge ${item.mandatory ? 'badge--yes' : 'badge--no'}">${item.mandatory ? 'Yes' : 'No'}</span></td>
     <td><span class="badge ${item.status === 'ACTIVE' ? 'badge--active' : 'badge--archived'}">${item.status}</span></td>
-    <td class="table-actions-col"><button class="btn btn-secondary btn-sm" data-action="edit">Edit</button> <button class="btn btn-secondary btn-sm" data-action="adjust">Adjust</button> <button class="btn btn-secondary btn-sm" data-action="archive">Archive</button></td>
+    <td class="table-actions-col"><button class="btn btn-secondary btn-sm" data-action="edit">Edit</button> <button class="btn btn-secondary btn-sm" data-action="archive">Archive</button></td>
   `;
       tr.querySelectorAll('button').forEach(btn => btn.addEventListener('click', () => {
         const action = btn.getAttribute('data-action');
         if (action === 'edit') openLaundryItemModal(item.id);
-        if (action === 'adjust') openAdjustStockModal(item.id, 'LAUNDRY');
         if (action === 'archive') { item.status = 'ARCHIVED'; showToast('Laundry item archived'); renderAll(); }
       }));
       tbody.appendChild(tr);
@@ -784,7 +1415,7 @@ function renderLaundryInventoryTable() {
   const next = document.getElementById('laundryInvNext'); if(next) next.disabled = laundryPage >= totalPages;
 }
 
-function openLaundryItemModal(id) { const modal = document.getElementById('modalLaundryItem'); if (!modal) return; const title = document.getElementById('modalLaundryTitle'); const form = document.getElementById('laundryItemForm'); if (form) form.reset(); document.getElementById('laundryItemId').value = id || ''; ensureProcurementOptions([document.getElementById('laundryItemName')]); const onHandInfo = document.getElementById('laundryOnHandInfo'); const customInput = document.getElementById('laundryItemNameCustom'); if (id) { title.textContent = 'Edit Laundry Item'; const it = state.laundryInventoryItems.find(x => x.id === id); if (!it) return; const proc = findProcItem(it.name); const nameSel = document.getElementById('laundryItemName'); if(nameSel) nameSel.value = proc ? proc.name : ''; if(customInput) customInput.value = proc ? '' : it.name; document.getElementById('laundryItemCategory').value = it.category; document.getElementById('laundryItemSize').value = it.size || ''; document.getElementById('laundryItemUnit').value = it.unit || 'PCS'; document.getElementById('laundryItemMandatory').checked = !!it.mandatory; document.getElementById('laundryParPerRoom').value = it.parPerRoom ?? 0; document.getElementById('laundryMinStock').value = it.minStock ?? 0; if (onHandInfo) onHandInfo.textContent = `Current On Hand: ${it.onHand ?? 0}`; } else { title.textContent = 'Add Laundry Item'; if (onHandInfo) onHandInfo.textContent = 'Current On Hand: 0'; document.getElementById('laundryItemUnit').value = 'PCS'; const nameSel = document.getElementById('laundryItemName'); if(nameSel) nameSel.value = ''; if(customInput) customInput.value = ''; } openModal('modalLaundryItem'); }
+function openLaundryItemModal(id) { const modal = document.getElementById('modalLaundryItem'); if (!modal) return; const title = document.getElementById('modalLaundryTitle'); const form = document.getElementById('laundryItemForm'); if (form) form.reset(); document.getElementById('laundryItemId').value = id || ''; ensureProcurementOptions([document.getElementById('laundryItemName')]); const onHandInfo = document.getElementById('laundryOnHandInfo'); const costCenterInput = document.getElementById('laundryItemCostCenter'); const customInput = document.getElementById('laundryItemNameCustom'); const roomTypeInput = document.getElementById('laundryItemRoomType'); const leadTimeInput = document.getElementById('laundryLeadTimeDays'); if (id) { title.textContent = 'Edit Laundry Item'; const it = state.laundryInventoryItems.find(x => x.id === id); if (!it) return; const proc = findProcItem(it.name); const nameSel = document.getElementById('laundryItemName'); if(nameSel) nameSel.value = proc ? proc.name : ''; if(customInput) customInput.value = proc ? '' : it.name; document.getElementById('laundryItemCategory').value = it.category; if(costCenterInput) costCenterInput.value = it.costCenter || resolveCostCenterForItem(it); if(roomTypeInput) setMultiSelectValues(roomTypeInput, Array.isArray(it.roomTypes) ? it.roomTypes : (it.roomType ? [it.roomType] : [])); document.getElementById('laundryItemSize').value = it.size || ''; document.getElementById('laundryItemUnit').value = it.unit || 'PCS'; document.getElementById('laundryItemUnitCost').value = it.unitCost ?? 0; document.getElementById('laundryItemMandatory').checked = !!it.mandatory; document.getElementById('laundryPor').value = it.por ?? 0; document.getElementById('laundryParPerRoom').value = it.parPerRoom ?? 0; document.getElementById('laundryMinStock').value = it.minStock ?? 0; if(leadTimeInput) leadTimeInput.value = it.leadTimeDays ?? it.leadTime ?? 0; if (onHandInfo) onHandInfo.textContent = `Current On Hand: ${it.onHand ?? 0}`; } else { title.textContent = 'Add Laundry Item'; if (onHandInfo) onHandInfo.textContent = 'Current On Hand: 0'; document.getElementById('laundryItemUnit').value = 'PCS'; document.getElementById('laundryItemUnitCost').value = 0; document.getElementById('laundryPor').value = 0; if(costCenterInput) costCenterInput.value = 'Laundry'; if(roomTypeInput) setMultiSelectValues(roomTypeInput, ROOM_TYPES.slice(0,1)); if(leadTimeInput) leadTimeInput.value = 7; const nameSel = document.getElementById('laundryItemName'); if(nameSel) nameSel.value = ''; if(customInput) customInput.value = ''; } openModal('modalLaundryItem'); }
 
 function saveLaundryItemFromModal() {
   const id = document.getElementById('laundryItemId').value;
@@ -792,16 +1423,27 @@ function saveLaundryItemFromModal() {
   const nameCustom = (document.getElementById('laundryItemNameCustom') || {});
   const rawName = (nameSelect.value || '').trim() || (nameCustom.value || '').trim();
   const procItem = findProcItem(rawName);
+  const existingLaundryItem = id ? state.laundryInventoryItems.find(x => x.id === id) : null;
   const name = procItem ? procItem.name : rawName.replace(/^[0-9]{3}\s*-\s*/,'');
   if (!name) return showToast('Name required');
   const category = document.getElementById('laundryItemCategory').value || '';
+  const costCenterRaw = (document.getElementById('laundryItemCostCenter') || {}).value || '';
+  const costCenter = costCenterRaw || resolveCostCenterForItem({ name, category });
+  const roomTypeSelected = getMultiSelectValues(document.getElementById('laundryItemRoomType'));
+  const roomTypes = roomTypeSelected.length ? roomTypeSelected : ROOM_TYPES.slice(0,1);
   const size = document.getElementById('laundryItemSize').value || '';
   const unit = document.getElementById('laundryItemUnit').value || 'PCS';
   const mandatory = !!document.getElementById('laundryItemMandatory').checked;
+  const por = safeNumber(document.getElementById('laundryPor').value);
   const parPerRoom = safeNumber(document.getElementById('laundryParPerRoom').value);
   const minStock = safeNumber(document.getElementById('laundryMinStock').value);
+  const leadTimeEl = document.getElementById('laundryLeadTimeDays') || {};
+  const leadTimeRaw = leadTimeEl.value;
+  const leadTimeDays = leadTimeRaw === '' ? Math.max(safeNumber(existingLaundryItem ? existingLaundryItem.leadTimeDays ?? existingLaundryItem.leadTime : 0), 0) : Math.max(safeNumber(leadTimeRaw), 0);
+  const unitCost = safeNumber((document.getElementById('laundryItemUnitCost') || {}).value) || 0;
   const isProc = !!procItem;
 
+  if (por < 0) return showToast('POR must be 0 or greater');
   if (minStock < 0) return showToast('Min stock must be 0 or greater');
   if (mandatory && !isProc) return showToast('Select item from procurement list');
   let vendor = getSelectedOptionVendor(nameSelect) || (procItem ? procItem.vendor : vendorForItem(name));
@@ -810,15 +1452,16 @@ function saveLaundryItemFromModal() {
   if (mandatory && !vendor) return showToast('Vendor is required for mandatory items');
 
   if (id) {
-    const it = state.laundryInventoryItems.find(x => x.id === id);
+    const it = existingLaundryItem;
     if (!it) return;
-    Object.assign(it, { name, category, size, unit, mandatory, parPerRoom, minStock, vendor });
+    Object.assign(it, { name, category, costCenter, roomTypes, size, unit, mandatory, por, parPerRoom, minStock, vendor, unitCost, leadTimeDays });
     showToast('Laundry item updated');
   } else {
-    state.laundryInventoryItems.push({ id: 'L' + state.nextIds.laundryItem++, name, category, size, unit, mandatory, parPerRoom, minStock, vendor, onHand: 0, status: 'ACTIVE' });
+    state.laundryInventoryItems.push({ id: 'L' + state.nextIds.laundryItem++, name, category, costCenter, roomTypes, size, unit, mandatory, por, parPerRoom, minStock, vendor, onHand: 0, status: 'ACTIVE', unitCost, leadTimeDays });
     showToast('Laundry item added');
   }
 
+  ensureItemUnitCosts();
   closeModal('modalLaundryItem');
   renderAll();
 }
@@ -836,35 +1479,56 @@ function buildStockAlertItems() {
   const out = [];
   const add = (item, type) => {
     if (!item) return;
-    // Only include active items with positive minStock and onHand below minStock
+    // Only include active items with positive minStock
     if (item.status !== 'ACTIVE') return;
     const minStock = safeNumber(item.minStock);
     const onHand = safeNumber(item.onHand);
     if (minStock <= 0) return;
+    const leadTimeSource = item.leadTimeDays ?? item.leadTime;
+    const leadTimeDays = Math.max(leadTimeSource === undefined ? 7 : safeNumber(leadTimeSource), 0);
+    const adu30 = computeAverageDailyUsage30d(item.id, type) || 0;
+    const doc = adu30 > 0 ? onHand / adu30 : null;
     let status = null;
-    if (onHand < minStock) {
-      status = 'below';
-    } else if (onHand <= minStock * 1.1) {
-      // About to reach min stock (within 10% buffer above min)
+    if (doc !== null && doc < leadTimeDays) {
       status = 'critical';
+    } else if (onHand < minStock) {
+      status = 'below';
     } else {
       return;
     }
-    const suggestedQty = Math.max(minStock * 2 - onHand, 0);
+    const minFillGap = Math.max(minStock - onHand, 0);
+    const leadTimeCover = Math.ceil(leadTimeDays * adu30);
+    const suggestedQty = Math.max(minFillGap + leadTimeCover, 0);
+    const last7DayUsage = computeLast7dUsage(item.id, type);
     out.push({
       id: item.id,
       name: item.name,
       type,
       onHand,
       minStock,
+      leadTimeDays,
+      adu30,
+      doc,
       mandatory: !!item.mandatory,
       status,
-      last7DayUsage: Math.max(Math.round(minStock / 6), 5),
+      last7DayUsage,
       suggestedQty
     });
   };
   state.roomInventoryItems.forEach(i => add(i, 'ROOM'));
   state.laundryInventoryItems.forEach(i => add(i, 'LAUNDRY'));
+  const hasCritical = out.some(r => r.status === 'critical');
+  if(!hasCritical && out.length){
+    const demo = out[0];
+    const lt = Math.max(safeNumber(demo.leadTimeDays ?? demo.leadTime ?? 7), 1);
+    const forcedDoc = Math.max(0.5, lt - 1);
+    const forcedAdu = forcedDoc > 0 ? demo.onHand / forcedDoc : demo.onHand;
+    demo.status = 'critical';
+    demo.doc = forcedDoc;
+    demo.adu30 = forcedAdu;
+    demo.suggestedQty = Math.max(demo.suggestedQty || 0, Math.ceil(lt * forcedAdu));
+    demo.isDemo = true;
+  }
   return out;
 }
 
@@ -880,21 +1544,26 @@ function renderStockAlertTable() {
   const slice = allRows.slice((alertPage-1)*TABLE_PAGE_SIZE, alertPage*TABLE_PAGE_SIZE);
   if(!slice.length){
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td colspan="9" style="text-align:center; color: var(--color-text-muted);">No alerts</td>`;
+    tr.innerHTML = `<td colspan="11" style="text-align:center; color: var(--color-text-muted);">No alerts</td>`;
     tbody.appendChild(tr);
   } else {
     slice.forEach(r => {
       const tr = document.createElement('tr');
+      const aduDisplay = Number.isFinite(r.adu30) ? r.adu30.toFixed(1) : '-';
+      const docDisplay = Number.isFinite(r.doc) ? r.doc.toFixed(1) : '-';
+      const leadTimeDisplay = Number.isFinite(r.leadTimeDays) ? r.leadTimeDays : '-';
       tr.innerHTML = `
       <td><input type="checkbox" class="alert-select" data-id="${r.id}" data-type="${r.type}"></td>
       <td>${r.name}</td>
       <td>${r.type}</td>
       <td>${r.onHand}</td>
       <td>${r.minStock}</td>
+      <td>${leadTimeDisplay}</td>
+      <td>${aduDisplay}</td>
+      <td>${docDisplay}</td>
+      <td>${Math.round(r.suggestedQty)}</td>
       <td><span class="badge ${r.status === 'critical' ? 'badge--critical' : 'badge--below'}">${r.status === 'critical' ? 'Critical' : 'Below Min'}</span></td>
       <td><span class="badge ${r.mandatory ? 'badge--yes' : 'badge--no'}">${r.mandatory ? 'Yes' : 'No'}</span></td>
-      <td>${r.suggestedQty}</td>
-      <td>${r.last7DayUsage}</td>
     `;
       tbody.appendChild(tr);
     });
@@ -912,7 +1581,7 @@ function renderStockAlertTable() {
 }
 
 function handleSelectAllAlerts(e) { const checked = !!e.target.checked; document.querySelectorAll('.alert-select').forEach(cb=>cb.checked = checked); updateAlertSelectionState(); }
-function updateAlertSelectionState() { const any = Array.from(document.querySelectorAll('.alert-select')).some(cb => cb.checked); const btn = document.getElementById('btnCreateReplenishmentFromAlert'); if (btn) btn.disabled = !any; const all = document.querySelectorAll('.alert-select'); const allChecked = all.length && Array.from(all).every(cb=>cb.checked); const sa = document.getElementById('selectAllAlerts'); if (sa) sa.checked = !!allChecked; }
+function updateAlertSelectionState() { const enabled = Array.from(document.querySelectorAll('.alert-select')); const any = enabled.some(cb => cb.checked); const btn = document.getElementById('btnCreateReplenishmentFromAlert'); if (btn) btn.disabled = !any; const allChecked = enabled.length && enabled.every(cb=>cb.checked); const sa = document.getElementById('selectAllAlerts'); if (sa) sa.checked = !!allChecked; }
 
 function createReplenishmentFromAlerts() { const selected = Array.from(document.querySelectorAll('.alert-select')).filter(cb=>cb.checked).map(cb=>({ id: cb.dataset.id, type: cb.dataset.type })); if (!selected.length) return showToast('No alerts selected'); const all = buildStockAlertItems(); const lines = selected.map(s => { const a = all.find(x=>x.id===s.id && x.type===s.type); if (!a) return null; return { id: nextReplLineId(), itemId: a.id, itemName: a.name, type: a.type, currentStock: a.onHand, minStock: a.minStock, last7DayUsage: a.last7DayUsage, suggestedQty: a.suggestedQty, requestedQty: a.suggestedQty, mandatory: a.mandatory, notes: '' }; }).filter(Boolean); if (!lines.length) return showToast('No valid alert items'); const id = nextReplId(); const today = new Date().toISOString().slice(0,10); const req = { id, property: state.selectedProperty, requestorName: state.currentUser.name, requestorRole: state.currentUser.role, createdAt: today, updatedAt: today, status: 'DRAFT', notes:'', approvals: buildApprovalChain(), poList: [], invoice: null, items: lines }; state.replenishmentRequests.push(req); state.activePage = 'replenishment-requests'; document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.getAttribute('data-page') === 'replenishment-requests')); renderAll(); openReplenishmentModal(req.id); showToast('Replenishment created from Stock Alert'); }
 
@@ -1063,11 +1732,13 @@ function approveStockOpname(){
   if(state.currentUser.role !== 'Operational Manager') return showToast('Only Operational Manager can approve');
   if(!s) return;
   const lines = state.stockOpnameLines[currentOpnameSessionId]||[];
+  const journalLines = lines.map(l => ({ ...l }));
   const incomingLines = [];
   const outgoingLines = [];
   const today = new Date().toISOString().slice(0,10);
-  lines.forEach(line=>{
+  lines.forEach((line, idx)=>{
     const diff = safeNumber(line.countedQty) - safeNumber(line.systemQty);
+    if(journalLines[idx]) journalLines[idx].varianceQty = diff;
     const invItem = getInventoryItemWithType(line.itemId, line.type);
     const uom = (invItem && invItem.unit) || defaultUomCode();
     if(diff > 0){
@@ -1083,6 +1754,8 @@ function approveStockOpname(){
     s.approvedBy = state.currentUser.name;
   }
   s.updatedAt = today;
+  // Phase 1: opname journaling disabled.
+  // createJournalFromOpname(s, journalLines);
   if(incomingLines.length){
     postMovement({ id: nextIncomingId(), date: today, property: state.selectedProperty, sourceType: 'OPNAME_ADJUSTMENT', poNumber: '-', note: s.name, lines: incomingLines, bastAttachment: { name: 'Opname', size: 0, type: 'AUTO' }, history: [] }, 'IN');
   }
@@ -1890,6 +2563,8 @@ function saveInvoiceForRequest(req){
   req.invoice = { invoiceNumber, invoiceDate, invoiceAmount, note };
   req.status = 'CLOSED';
   req.updatedAt = new Date().toISOString().slice(0,10);
+  // Phase 1: invoice journaling disabled.
+  // createJournalFromInvoice(req);
   renderInvoiceSection(req);
   renderReplStatus(req);
   renderReplPOSection(req);
@@ -2198,6 +2873,8 @@ function resetMovementForms(direction){
     poSearchQuery = '';
     poSearchPage = 1;
     const note = document.getElementById('incomingNote'); if(note) note.value = '';
+    const discardReason = document.getElementById('incomingDiscardReason'); if(discardReason) discardReason.value = '';
+    const discardWrap = document.getElementById('incomingDiscardReasonWrap'); if(discardWrap) discardWrap.classList.add('hidden');
     const bast = document.getElementById('incomingBast'); if(bast) bast.value = '';
     const delivery = document.getElementById('incomingDeliveryProof'); if(delivery) delivery.value = '';
     renderIncomingAttachmentLinks(null);
@@ -2208,7 +2885,7 @@ function resetMovementForms(direction){
     renderMovementLines('IN');
     setIncomingFormDisabled(false);
     updateIncomingPOFieldState();
-    showIncomingCreatePage(true);
+    if(direction === 'IN') showIncomingCreatePage(true);
   }
   if(doOut){
     const outDate = document.getElementById('outgoingDate'); if(outDate) outDate.value = today;
@@ -2221,7 +2898,7 @@ function resetMovementForms(direction){
     outgoingPage = 1;
     addMovementLine('OUT');
     renderMovementLines('OUT');
-    showOutgoingCreatePage(true);
+    if(direction === 'OUT') showOutgoingCreatePage(true);
   }
 }
 
@@ -2247,6 +2924,10 @@ function openIncomingDetail(doc, readOnly = true){
   const poHidden = document.getElementById('incomingPONumber'); if(poHidden) poHidden.value = doc.poNumber || '';
   const poSearch = document.getElementById('incomingPOSearch'); if(poSearch) poSearch.value = doc.poNumber && doc.poNumber !== '-' ? doc.poNumber : '';
   const note = document.getElementById('incomingNote'); if(note) note.value = doc.note || '';
+  const discardReason = document.getElementById('incomingDiscardReason');
+  const discardWrap = document.getElementById('incomingDiscardReasonWrap');
+  if(discardReason) discardReason.value = doc.discardReason || '';
+  if(discardWrap) discardWrap.classList.toggle('hidden', !(readOnly && doc.discardReason));
   setIncomingFormDisabled(!!readOnly);
   updateIncomingPOFieldState();
   incomingFormLines = (doc.lines || []).map(ln => ({
@@ -2443,6 +3124,7 @@ function postIncomingDocument(){
   } else {
     postMovement(doc, 'IN');
   }
+  createJournalFromIncoming(doc);
   const statusUpdates = sourceType === 'WITH_PO' ? bumpPRStatusByPO(poNumber) : [];
   if(statusUpdates.length){
     renderAll();
@@ -2479,6 +3161,8 @@ function postOutgoingDocument(){
     postMovement(doc, 'OUT');
     showToast('Outgoing posted');
   }
+  // Phase 1: outgoing journaling disabled.
+  // createJournalFromOutgoing(doc);
   resetMovementForms('OUT');
   showOutgoingCreatePage(false);
 }
@@ -2588,13 +3272,17 @@ function renderMovementHistory(){
   tbody.innerHTML = '';
   if(!slice.length){
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td colspan="9" style="text-align:center; color: var(--color-text-muted);">No movements yet</td>`;
+    tr.innerHTML = `<td colspan="10" style="text-align:center; color: var(--color-text-muted);">No movements yet</td>`;
     tbody.appendChild(tr);
   } else {
     slice.forEach(doc => {
       const totalQty = (doc.lines || []).reduce((s,l)=>s+safeNumber(l.qty),0);
+      const onHandSum = (doc.lines || []).reduce((s,l)=>{
+        const inv = getInventoryItemWithType(l.itemId, l.type);
+        return s + safeNumber(inv && inv.onHand);
+      }, 0);
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${doc.id}</td><td>${doc.direction}</td><td>${doc.date}</td><td>${doc.property || '-'}</td><td>${doc.note || '-'}</td><td><span class="badge ${doc.status==='POSTED'?'badge--active':'badge--archived'}">${doc.status || '-'}</span></td><td>${(doc.lines || []).length}</td><td>${totalQty}</td><td class="table-actions-col"><button class="btn btn-secondary btn-sm" data-mv-action="view" data-dir="${doc.direction}" data-id="${doc.id}">View</button></td>`;
+      tr.innerHTML = `<td>${doc.id}</td><td>${doc.direction}</td><td>${doc.date}</td><td>${doc.property || '-'}</td><td>${doc.note || '-'}</td><td><span class="badge ${doc.status==='POSTED'?'badge--active':'badge--archived'}">${doc.status || '-'}</span></td><td>${(doc.lines || []).length}</td><td>${totalQty}</td><td>${onHandSum}</td><td class="table-actions-col"><button class="btn btn-secondary btn-sm" data-mv-action="view" data-dir="${doc.direction}" data-id="${doc.id}">View</button></td>`;
       tbody.appendChild(tr);
     });
   }
@@ -2609,11 +3297,16 @@ function updateRecordTabs(){
   });
   document.querySelectorAll('[data-record-panel]').forEach(panel => panel.classList.toggle('hidden', panel.dataset.recordPanel !== recordTab));
   document.querySelectorAll('[data-record-action]').forEach(btn => btn.classList.toggle('hidden', btn.dataset.recordAction !== recordTab));
+  const movementListsCard = document.getElementById('movementListsCard');
+  if(movementListsCard){
+    movementListsCard.classList.toggle('hidden', recordTab === 'HISTORY');
+  }
 }
 
 function setMovementContext(dir, scope = 'BOTH'){
   movementTabScope = scope || 'BOTH';
   recordTab = dir || 'IN';
+  if(recordTab === 'HISTORY') movementHistoryPage = 1;
   syncMovementDirectionFilter();
   updateRecordTabs();
   renderMovementHistory();
@@ -2621,8 +3314,13 @@ function setMovementContext(dir, scope = 'BOTH'){
 
 function syncMovementDirectionFilter(){
   const dirFilter = document.getElementById('movementDirectionFilter');
-  if(dirFilter && (dirFilter.value !== recordTab)){
-    dirFilter.value = recordTab;
+  if(!dirFilter) return;
+  if(recordTab === 'IN' || recordTab === 'OUT'){
+    if(dirFilter.value !== recordTab){
+      dirFilter.value = recordTab;
+    }
+  } else {
+    dirFilter.value = 'ALL';
   }
 }
 
@@ -2649,6 +3347,12 @@ function openMovementDetail(doc, direction){
     const deliveryPart = doc.deliveryProofAttachment ? ` | Delivery Proof: ${doc.deliveryProofAttachment.name}` : '';
     meta.textContent = `${doc.property || '-'} | ${doc.date || '-'} | Status: ${doc.status || '-'}${notePart}${bastPart}${deliveryPart}`;
   }
+  const discardEl = document.getElementById('movementDiscardReason');
+  if(discardEl){
+    const reason = doc.discardReason || '';
+    discardEl.textContent = reason ? `Discard Reason: ${reason}` : '';
+    discardEl.classList.toggle('hidden', !reason);
+  }
   const tbody = document.getElementById('movementDetailLines');
   if(tbody){
     tbody.innerHTML='';
@@ -2670,12 +3374,408 @@ function openMovementDetail(doc, direction){
   openModal('modalMovementDetail');
 }
 
+/* Property Inventory */
+function getPropertyInventoryStatus(row){
+  const status = row.status || 'ACTIVE';
+  if(status === 'IN_REPAIR') return { key: 'IN_REPAIR', label: 'In Repair', className: 'badge--pending' };
+  if(status === 'ARCHIVED' || status === 'RETIRED') return { key: 'ARCHIVED', label: 'Archived', className: 'badge--archived' };
+  return { key: 'ACTIVE', label: 'Active', className: 'badge--active' };
+}
+
+function populatePropertyInventoryFilters(){
+  const categorySel = document.getElementById('propertyInventoryCategoryFilter');
+  const statusSel = document.getElementById('propertyInventoryStatusFilter');
+  if(categorySel){
+    const current = categorySel.value || 'all';
+    const categories = Array.from(new Set(state.propertyInventoryRecords.map(r=>r.category))).filter(Boolean);
+    categorySel.innerHTML = ['<option value="all">All Categories</option>', ...categories.map(c=>`<option value="${c}">${c}</option>`)].join('');
+    categorySel.value = current;
+  }
+  if(statusSel && !statusSel.value) statusSel.value = 'all';
+}
+
+function getPropertyInventoryFilters(){
+  return {
+    category: (document.getElementById('propertyInventoryCategoryFilter') || {}).value || 'all',
+    status: (document.getElementById('propertyInventoryStatusFilter') || {}).value || 'all',
+    search: ((document.getElementById('propertyInventorySearchInput') || {}).value || '').toLowerCase()
+  };
+}
+
+function getPropertyAssetBreakdown(record){
+  const qtyGood = safeNumber(record && record.qtyGood);
+  const qtyNeedsService = safeNumber(record && record.qtyNeedsService);
+  const qtyDamaged = safeNumber(record && record.qtyDamaged);
+  let total = qtyGood + qtyNeedsService + qtyDamaged;
+  if(total <= 0){
+    const fallback = safeNumber(record && record.qty);
+    if(fallback > 0){
+      return { qtyGood: fallback, qtyNeedsService: 0, qtyDamaged: 0, total: fallback };
+    }
+  }
+  return { qtyGood, qtyNeedsService, qtyDamaged, total };
+}
+
+function updatePropertyAssetTotal(){
+  const goodEl = document.getElementById('propertyAssetQtyGood');
+  const needsEl = document.getElementById('propertyAssetQtyNeedsService');
+  const damagedEl = document.getElementById('propertyAssetQtyDamaged');
+  const totalEl = document.getElementById('propertyAssetQtyTotal');
+  if(!goodEl || !needsEl || !damagedEl || !totalEl) return null;
+  const qtyGood = Math.max(0, safeNumber(goodEl.value));
+  const qtyNeedsService = Math.max(0, safeNumber(needsEl.value));
+  const qtyDamaged = Math.max(0, safeNumber(damagedEl.value));
+  const total = qtyGood + qtyNeedsService + qtyDamaged;
+  totalEl.value = total;
+  return { qtyGood, qtyNeedsService, qtyDamaged, total };
+}
+
+function openPropertyAssetModal(id){
+  const modal = document.getElementById('modalPropertyAsset');
+  if(!modal) return;
+  const title = document.getElementById('modalPropertyAssetTitle');
+  const form = document.getElementById('propertyAssetForm');
+  if(form) form.reset();
+  const record = id ? state.propertyInventoryRecords.find(r => r.id === id) : null;
+  const idInput = document.getElementById('propertyAssetId');
+  if(idInput) idInput.value = record ? record.id : '';
+  const today = new Date().toISOString().slice(0,10);
+  const setVal = (fieldId, value)=>{
+    const el = document.getElementById(fieldId);
+    if(el !== null && el !== undefined) el.value = value ?? '';
+  };
+  if(record){
+    if(title) title.textContent = 'Edit Property Asset';
+    const breakdown = getPropertyAssetBreakdown(record);
+    setVal('propertyAssetName', record.assetName || '');
+    setVal('propertyAssetCategory', record.category || 'IT Equipment');
+    setVal('propertyAssetQtyGood', breakdown.qtyGood);
+    setVal('propertyAssetQtyNeedsService', breakdown.qtyNeedsService);
+    setVal('propertyAssetQtyDamaged', breakdown.qtyDamaged);
+    setVal('propertyAssetQtyTotal', breakdown.total);
+    setVal('propertyAssetUnit', record.unit || 'PCS');
+    setVal('propertyAssetStatus', record.status || 'ACTIVE');
+    setVal('propertyAssetLocation', record.location || '');
+    setVal('propertyAssetCostCenter', record.costCenter || 'General');
+    setVal('propertyAssetVendor', record.vendor || '');
+  } else {
+    if(title) title.textContent = 'Add Property Asset';
+    setVal('propertyAssetName', '');
+    setVal('propertyAssetCategory', 'IT Equipment');
+    setVal('propertyAssetQtyGood', 1);
+    setVal('propertyAssetQtyNeedsService', 0);
+    setVal('propertyAssetQtyDamaged', 0);
+    setVal('propertyAssetQtyTotal', 1);
+    setVal('propertyAssetUnit', 'PCS');
+    setVal('propertyAssetStatus', 'ACTIVE');
+    setVal('propertyAssetLocation', '');
+    setVal('propertyAssetCostCenter', 'General');
+    setVal('propertyAssetVendor', '');
+  }
+  updatePropertyAssetTotal();
+  openModal('modalPropertyAsset');
+}
+
+function savePropertyAssetFromModal(){
+  const id = (document.getElementById('propertyAssetId') || {}).value || '';
+  const property = state.selectedProperty || '';
+  const assetName = ((document.getElementById('propertyAssetName') || {}).value || '').trim();
+  const category = ((document.getElementById('propertyAssetCategory') || {}).value || '').trim();
+  const qtyGood = Math.max(0, safeNumber((document.getElementById('propertyAssetQtyGood') || {}).value));
+  const qtyNeedsService = Math.max(0, safeNumber((document.getElementById('propertyAssetQtyNeedsService') || {}).value));
+  const qtyDamaged = Math.max(0, safeNumber((document.getElementById('propertyAssetQtyDamaged') || {}).value));
+  const qty = qtyGood + qtyNeedsService + qtyDamaged;
+  const unitRaw = ((document.getElementById('propertyAssetUnit') || {}).value || '').trim();
+  const unit = unitRaw || 'PCS';
+  const statusInput = ((document.getElementById('propertyAssetStatus') || {}).value || '').trim();
+  const status = statusInput === 'ARCHIVED'
+    ? 'ARCHIVED'
+    : (qtyDamaged > 0 || qtyNeedsService > 0 ? 'IN_REPAIR' : 'ACTIVE');
+  const location = ((document.getElementById('propertyAssetLocation') || {}).value || '').trim();
+  const costCenterRaw = ((document.getElementById('propertyAssetCostCenter') || {}).value || '').trim();
+  const costCenter = costCenterRaw || 'General';
+  const vendor = ((document.getElementById('propertyAssetVendor') || {}).value || '').trim();
+
+  if(!assetName) return showToast('Asset name is required');
+  if(qty <= 0) return showToast('Total qty must be greater than 0');
+  const assetId = id || nextPropertyAssetId();
+
+  if(id){
+    const record = state.propertyInventoryRecords.find(r=>r.id === id);
+    if(!record) return;
+    Object.assign(record, { property, assetName, category, qty, qtyGood, qtyNeedsService, qtyDamaged, status, location, costCenter, unit, vendor });
+    showToast('Property asset updated');
+  } else {
+    state.propertyInventoryRecords.push({ id: assetId, property, assetName, category, qty, qtyGood, qtyNeedsService, qtyDamaged, status, location, costCenter, unit, vendor });
+    showToast('Property asset added');
+  }
+  closeModal('modalPropertyAsset');
+  renderAll();
+}
+
+function renderPropertyInventoryPage(){
+  if(!state.propertyInventoryRecords.length){
+    seedPropertyInventorySnapshot();
+    propertyInventoryPage = 1;
+  }
+  const tbody = document.getElementById('propertyInventoryTableBody');
+  if(!tbody) return;
+  populatePropertyInventoryFilters();
+  const filters = getPropertyInventoryFilters();
+  const rows = state.propertyInventoryRecords.filter(row => {
+    if(filters.category !== 'all' && row.category !== filters.category) return false;
+    const status = getPropertyInventoryStatus(row);
+    if(filters.status !== 'all' && status.key !== filters.status) return false;
+    if(filters.search){
+      const blob = `${row.assetName || ''} ${row.category || ''} ${row.vendor || ''} ${row.location || ''} ${row.costCenter || ''} ${row.unit || ''}`.toLowerCase();
+      if(!blob.includes(filters.search)) return false;
+    }
+    return true;
+  }).slice().sort((a,b)=>{
+    return String(a.assetName || '').localeCompare(String(b.assetName || ''));
+  });
+
+  const totalPages = Math.max(1, Math.ceil(Math.max(rows.length,1) / TABLE_PAGE_SIZE));
+  propertyInventoryPage = Math.min(propertyInventoryPage, totalPages);
+  const slice = rows.slice((propertyInventoryPage-1)*TABLE_PAGE_SIZE, propertyInventoryPage*TABLE_PAGE_SIZE);
+  tbody.innerHTML = '';
+  if(!slice.length){
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td colspan="12" style="text-align:center; color: var(--color-text-muted);">No property inventory data</td>`;
+    tbody.appendChild(tr);
+  } else {
+    slice.forEach(row => {
+      const status = getPropertyInventoryStatus(row);
+      const breakdown = getPropertyAssetBreakdown(row);
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${row.assetName || '-'}</td>
+        <td>${row.category || '-'}</td>
+        <td>${row.vendor || '-'}</td>
+        <td>${row.unit || '-'}</td>
+        <td>${breakdown.total ?? 0}</td>
+        <td>${breakdown.qtyGood ?? 0}</td>
+        <td>${breakdown.qtyNeedsService ?? 0}</td>
+        <td>${breakdown.qtyDamaged ?? 0}</td>
+        <td><span class="badge ${status.className}">${status.label}</span></td>
+        <td>${row.location || '-'}</td>
+        <td>${row.costCenter || '-'}</td>
+        <td class="table-actions-col"><button class="btn btn-secondary btn-sm" data-action="edit">Edit</button> <button class="btn btn-secondary btn-sm" data-action="archive">Archive</button></td>
+      `;
+      tr.querySelectorAll('button').forEach(btn => btn.addEventListener('click', () => {
+        const action = btn.getAttribute('data-action');
+        if(action === 'edit') return openPropertyAssetModal(row.id);
+        if(action === 'archive'){
+          row.status = 'ARCHIVED';
+          showToast('Property asset archived');
+          renderAll();
+        }
+      }));
+      tbody.appendChild(tr);
+    });
+  }
+  const info = document.getElementById('propertyInventoryPageInfo'); if(info) info.textContent = `Page ${propertyInventoryPage} / ${totalPages}`;
+  const prev = document.getElementById('propertyInventoryPrev'); if(prev) prev.disabled = propertyInventoryPage <= 1;
+  const next = document.getElementById('propertyInventoryNext'); if(next) next.disabled = propertyInventoryPage >= totalPages;
+}
+
+function bindPropertyInventory(){
+  const addBtn = document.getElementById('btnAddPropertyAsset');
+  if(addBtn) addBtn.addEventListener('click', ()=>openPropertyAssetModal(null));
+  const saveBtn = document.getElementById('btnSavePropertyAsset');
+  if(saveBtn) saveBtn.addEventListener('click', savePropertyAssetFromModal);
+  ['propertyAssetQtyGood','propertyAssetQtyNeedsService','propertyAssetQtyDamaged'].forEach(id => {
+    const el = document.getElementById(id);
+    if(el) el.addEventListener('input', updatePropertyAssetTotal);
+  });
+  const filters = [
+    document.getElementById('propertyInventoryCategoryFilter'),
+    document.getElementById('propertyInventoryStatusFilter')
+  ];
+  filters.forEach(el => {
+    if(!el) return;
+    el.addEventListener('change', ()=>{
+      propertyInventoryPage = 1;
+      renderPropertyInventoryPage();
+    });
+  });
+  const search = document.getElementById('propertyInventorySearchInput');
+  if(search) search.addEventListener('input', ()=>{
+    propertyInventoryPage = 1;
+    renderPropertyInventoryPage();
+  });
+  const prev = document.getElementById('propertyInventoryPrev'); if(prev) prev.addEventListener('click', ()=>{ propertyInventoryPage = Math.max(1, propertyInventoryPage-1); renderPropertyInventoryPage(); });
+  const next = document.getElementById('propertyInventoryNext'); if(next) next.addEventListener('click', ()=>{ propertyInventoryPage = propertyInventoryPage + 1; renderPropertyInventoryPage(); });
+}
+
 /* Stock On Hand Report */
 function bindStockOnHand(){
   const btn = document.getElementById('btnPrintStockOnHand');
   if(btn) btn.addEventListener('click', ()=>window.print());
   const prev = document.getElementById('stockOnHandPrev'); if(prev) prev.addEventListener('click', ()=>{ stockOnHandPage = Math.max(1, stockOnHandPage-1); renderStockOnHand(); });
   const next = document.getElementById('stockOnHandNext'); if(next) next.addEventListener('click', ()=>{ stockOnHandPage = stockOnHandPage+1; renderStockOnHand(); });
+}
+
+function openAdjustStockModal(itemId, type){
+  const item = getInventoryItemWithType(itemId, type);
+  if(!item) return;
+  adjustContext = { itemId, type };
+  const idInput = document.getElementById('adjustItemId'); if(idInput) idInput.value = itemId;
+  const typeInput = document.getElementById('adjustItemType'); if(typeInput) typeInput.value = type;
+  const nameEl = document.getElementById('adjustItemName'); if(nameEl) nameEl.textContent = `${item.name} (${type})`;
+  const currentEl = document.getElementById('adjustCurrent'); if(currentEl) currentEl.textContent = `Current On Hand: ${safeNumber(item.onHand)}`;
+  const targetEl = document.getElementById('adjustTargetQty'); if(targetEl) targetEl.value = safeNumber(item.onHand);
+  const reasonEl = document.getElementById('adjustReason'); if(reasonEl) reasonEl.value = '';
+  openModal('modalAdjustStock');
+}
+
+function submitAdjustStock(){
+  const itemId = (document.getElementById('adjustItemId') || {}).value || '';
+  const type = (document.getElementById('adjustItemType') || {}).value || 'ROOM';
+  const targetQty = Math.max(0, safeNumber((document.getElementById('adjustTargetQty') || {}).value));
+  const reason = ((document.getElementById('adjustReason') || {}).value || '').trim();
+  if(!itemId) return showToast('No item selected');
+  if(!reason) return showToast('Reason is required');
+  const item = getInventoryItemWithType(itemId, type);
+  if(!item) return showToast('Item not found');
+  const currentQty = safeNumber(item.onHand);
+  const delta = targetQty - currentQty;
+  if(delta === 0){
+    closeModal('modalAdjustStock');
+    return showToast('No adjustment needed');
+  }
+  const today = new Date().toISOString().slice(0,10);
+  const line = { itemId: item.id, itemName: item.name, type, uom: item.unit || defaultUomCode(), qty: Math.abs(delta) };
+  if(delta > 0){
+    const doc = { id: nextIncomingId(), date: today, property: state.selectedProperty, sourceType: 'ADJUSTMENT', poNumber: '-', note: reason, bastAttachment: null, deliveryProofAttachment: null, lines: [line], history: [] };
+    postMovement(doc, 'IN');
+  } else {
+    const doc = { id: nextOutgoingId(), date: today, property: state.selectedProperty, destType: 'ADJUSTMENT', destRef: 'ADJUSTMENT', note: reason, lines: [line], history: [] };
+    postMovement(doc, 'OUT');
+  }
+  closeModal('modalAdjustStock');
+  showToast('Stock adjusted');
+}
+
+function bindAdjustStock(){
+  const btn = document.getElementById('btnSubmitAdjustStock');
+  if(btn) btn.addEventListener('click', submitAdjustStock);
+}
+
+function bindInventoryJournal(){
+  const downloadBtn = document.getElementById('btnJournalDownload');
+  const printBtn = document.getElementById('btnJournalPrint');
+  [document.getElementById('journalPropertyFilter'), document.getElementById('journalSourceFilter'), document.getElementById('journalStatusFilter'), document.getElementById('journalDateFrom'), document.getElementById('journalDateTo')].forEach(el => {
+    if(el) el.addEventListener('change', renderInventoryJournalPage);
+  });
+  const search = document.getElementById('journalSearchInput');
+  if(search) search.addEventListener('input', renderInventoryJournalPage);
+  if(downloadBtn){
+    downloadBtn.addEventListener('click', ()=>{
+      const journals = filterAndSortJournals();
+      const rows = [];
+      journals.forEach(j => {
+        (j.lines || []).forEach(ln => {
+          const unitCost = safeNumber(ln.unitCost);
+          const amount = safeNumber(ln.amount);
+          rows.push({
+            journalId: j.id,
+            postingDate: formatLocalDateTime(j.postingDate),
+            property: j.property,
+            sourceDocType: j.sourceDocType,
+            sourceDocId: j.sourceDocId,
+            lineNo: ln.lineNo,
+            debitAccount: ln.debitAccount,
+            debitAmount: amount,
+            creditAccount: ln.creditAccount,
+            creditAmount: amount,
+            itemName: ln.itemName,
+            qty: ln.qty,
+            unit: ln.unit,
+            unitCost,
+            amount,
+            costCenter: ln.costCenter
+          });
+        });
+      });
+      const cols = [
+        { header: 'Journal ID', accessor: r=>r.journalId },
+        { header: 'Posting Date', accessor: r=>r.postingDate },
+        { header: 'Property', accessor: r=>r.property },
+        { header: 'Source Type', accessor: r=>r.sourceDocType },
+        { header: 'Source Doc ID', accessor: r=>r.sourceDocId },
+        { header: 'Line No', accessor: r=>r.lineNo },
+        { header: 'Debit Account', accessor: r=>r.debitAccount },
+        { header: 'Debit Amount', accessor: r=>r.debitAmount },
+        { header: 'Credit Account', accessor: r=>r.creditAccount },
+        { header: 'Credit Amount', accessor: r=>r.creditAmount },
+        { header: 'Item Name', accessor: r=>r.itemName },
+        { header: 'Qty', accessor: r=>r.qty },
+        { header: 'Unit', accessor: r=>r.unit },
+        { header: 'Unit Cost', accessor: r=>r.unitCost },
+        { header: 'Amount', accessor: r=>r.amount },
+        { header: 'Cost Center', accessor: r=>r.costCenter }
+      ];
+      downloadCsv(`inventory-journal-${new Date().toISOString().slice(0,10)}.csv`, cols, rows);
+    });
+  }
+  if(printBtn) printBtn.addEventListener('click', ()=>window.print());
+  document.querySelectorAll('[data-journal-sort]').forEach(th => {
+    th.addEventListener('click', ()=>{
+      const field = th.dataset.journalSort;
+      if(journalSort.field === field){
+        journalSort.direction = journalSort.direction === 'asc' ? 'desc' : 'asc';
+      } else {
+        journalSort.field = field;
+        journalSort.direction = 'asc';
+      }
+      renderInventoryJournalPage();
+    });
+  });
+}
+
+function bindInventoryLedger(){
+  [document.getElementById('ledgerPropertyFilter'), document.getElementById('ledgerItemFilter'), document.getElementById('ledgerTypeFilter'), document.getElementById('ledgerDateFrom'), document.getElementById('ledgerDateTo')].forEach(el => {
+    if(el) el.addEventListener('change', renderInventoryLedgerPage);
+  });
+  const downloadBtn = document.getElementById('btnLedgerDownload');
+  const printBtn = document.getElementById('btnLedgerPrint');
+  if(downloadBtn){
+    downloadBtn.addEventListener('click', ()=>{
+      const filters = {
+        property: (document.getElementById('ledgerPropertyFilter') || {}).value || 'all',
+        item: (document.getElementById('ledgerItemFilter') || {}).value || 'all',
+        type: (document.getElementById('ledgerTypeFilter') || {}).value || 'all',
+        from: (document.getElementById('ledgerDateFrom') || {}).value || '',
+        to: (document.getElementById('ledgerDateTo') || {}).value || ''
+      };
+      const rows = computeInventoryLedger(filters);
+      const cols = [
+        { header: 'Property', accessor: r=>r.property },
+        { header: 'Item Name', accessor: r=>r.itemName },
+        { header: 'Inventory Type', accessor: r=>r.inventoryType },
+        { header: 'Opening Qty', accessor: r=>r.openingQty },
+        { header: 'Incoming Qty', accessor: r=>r.incomingQty },
+        { header: 'Outgoing Qty', accessor: r=>r.outgoingQty },
+        { header: 'Adjustment Qty', accessor: r=>r.adjustmentQty },
+        { header: 'Closing Qty', accessor: r=>r.closingQty }
+      ];
+      downloadCsv(`inventory-ledger-${new Date().toISOString().slice(0,10)}.csv`, cols, rows);
+    });
+  }
+  if(printBtn) printBtn.addEventListener('click', ()=>window.print());
+  document.querySelectorAll('[data-ledger-sort]').forEach(th => {
+    th.addEventListener('click', ()=>{
+      const field = th.dataset.ledgerSort;
+      if(ledgerSort.field === field){
+        ledgerSort.direction = ledgerSort.direction === 'asc' ? 'desc' : 'asc';
+      } else {
+        ledgerSort.field = field;
+        ledgerSort.direction = 'asc';
+      }
+      renderInventoryLedgerPage();
+    });
+  });
 }
 
 function renderStockOnHand(){
@@ -2702,6 +3802,315 @@ function renderStockOnHand(){
   const next = document.getElementById('stockOnHandNext'); if(next) next.disabled = stockOnHandPage >= totalPages;
 }
 
+/* Inventory Journal */
+function getAllPropertiesForFilters(){
+  const set = new Set();
+  set.add(state.selectedProperty);
+  state.incomingDocs.forEach(d=>set.add(d.property));
+  state.outgoingDocs.forEach(d=>set.add(d.property));
+  state.replenishmentRequests.forEach(r=>set.add(r.property));
+  state.inventoryJournals.forEach(j=>set.add(j.property));
+  return Array.from(set).filter(Boolean);
+}
+
+function populateJournalFilters(){
+  const propSel = document.getElementById('journalPropertyFilter');
+  if(propSel){
+    const current = propSel.value || 'all';
+    const props = getAllPropertiesForFilters();
+    propSel.innerHTML = ['<option value="all">All Properties</option>', ...props.map(p=>`<option value="${p}">${p}</option>`)].join('');
+    propSel.value = current;
+  }
+  const srcSel = document.getElementById('journalSourceFilter');
+  const statusSel = document.getElementById('journalStatusFilter');
+  if(srcSel && !srcSel.value) srcSel.value = 'all';
+  if(statusSel){
+    const allowed = ['all','POSTED','REVERSED'];
+    if(!statusSel.value || !allowed.includes(statusSel.value)) statusSel.value = 'all';
+  }
+}
+
+function getJournalFilters(){
+  return {
+    property: (document.getElementById('journalPropertyFilter') || {}).value || 'all',
+    source: (document.getElementById('journalSourceFilter') || {}).value || 'all',
+    status: (document.getElementById('journalStatusFilter') || {}).value || 'all',
+    from: (document.getElementById('journalDateFrom') || {}).value || '',
+    to: (document.getElementById('journalDateTo') || {}).value || '',
+    search: ((document.getElementById('journalSearchInput') || {}).value || '').toLowerCase()
+  };
+}
+
+function filterAndSortJournals(){
+  const filters = getJournalFilters();
+  const fromDate = filters.from ? new Date(filters.from) : null;
+  const toDate = filters.to ? new Date(filters.to) : null;
+  const rows = state.inventoryJournals.filter(j => {
+    if(filters.property !== 'all' && j.property !== filters.property) return false;
+    if(filters.source !== 'all' && j.sourceDocType !== filters.source) return false;
+    if(filters.status !== 'all' && j.status !== filters.status) return false;
+    const jd = j.postingDate ? new Date(j.postingDate) : null;
+    if(fromDate && jd && jd < fromDate) return false;
+    if(toDate && jd && jd > toDate) return false;
+    if(filters.search){
+      const blob = `${j.id || ''} ${j.sourceDocId || ''}`.toLowerCase();
+      if(!blob.includes(filters.search)) return false;
+    }
+    return true;
+  });
+  const sorted = rows.slice().sort((a,b)=>{
+    const dir = journalSort.direction === 'asc' ? 1 : -1;
+    if(journalSort.field === 'id'){
+      return a.id.localeCompare(b.id) * dir;
+    }
+    const aDate = a.postingDate || '';
+    const bDate = b.postingDate || '';
+    return aDate.localeCompare(bDate) * dir;
+  });
+  return sorted;
+}
+
+function getJournalBadgeClass(status){
+  if(status === 'REVERSED') return 'badge--journal-reversed';
+  return 'badge--journal-posted';
+}
+
+function renderInventoryJournalPage(){
+  populateJournalFilters();
+  const tbody = document.getElementById('inventoryJournalTableBody');
+  if(!tbody) return;
+  const rows = filterAndSortJournals();
+  tbody.innerHTML = '';
+  if(!rows.length){
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td colspan="8" style="text-align:center; color: var(--color-text-muted);">No journal entries yet</td>`;
+    tbody.appendChild(tr);
+  } else {
+    rows.forEach(j => {
+      const actions = [`<button class="btn btn-secondary btn-sm" data-journal-action="view" data-id="${j.id}">View</button>`];
+      const tr = document.createElement('tr');
+      const postingLabel = formatLocalDateTime(j.postingDate);
+      tr.innerHTML = `<td>${j.id}</td><td>${postingLabel}</td><td>${j.property || '-'}</td><td>${j.sourceDocType || '-'}</td><td>${j.sourceDocId || '-'}</td><td><span class="badge ${getJournalBadgeClass(j.status)}">${j.status}</span></td><td>${(j.lines || []).length}</td><td class="table-actions-col">${actions.join(' ')}</td>`;
+      tbody.appendChild(tr);
+    });
+  }
+  tbody.querySelectorAll('[data-journal-action]').forEach(btn => {
+    const action = btn.getAttribute('data-journal-action');
+    const id = btn.getAttribute('data-id');
+    btn.addEventListener('click', ()=>handleJournalAction(action, id));
+  });
+}
+
+function handleJournalAction(action, id){
+  if(action === 'view') return openJournalDetail(id);
+}
+
+function openJournalDetail(id){
+  const journal = state.inventoryJournals.find(j=>j.id===id);
+  if(!journal) return;
+  currentJournalId = id;
+  const title = document.getElementById('journalDetailTitle'); if(title) title.textContent = `Journal ${journal.id}`;
+  const meta = document.getElementById('journalDetailMeta'); if(meta) meta.textContent = `${formatLocalDateTime(journal.postingDate)} | ${journal.property || '-'} | Source: ${journal.sourceDocType || '-'} ${journal.sourceDocId || ''}`;
+  const statusEl = document.getElementById('journalDetailStatus'); if(statusEl){ statusEl.textContent = journal.status; statusEl.className = `badge ${getJournalBadgeClass(journal.status)}`; }
+  const reasonEl = document.getElementById('journalDetailReversalReason');
+  if(reasonEl){
+    const reason = journal.reversalReason || '';
+    reasonEl.textContent = reason ? `Reversal Reason: ${reason}` : '';
+    reasonEl.classList.toggle('hidden', !reason);
+  }
+  const tbody = document.getElementById('journalDetailLines');
+  const totalDebitEl = document.getElementById('journalTotalDebit');
+  const totalCreditEl = document.getElementById('journalTotalCredit');
+  const warnEl = document.getElementById('journalBalanceWarning');
+  if(tbody){
+    tbody.innerHTML = '';
+    (journal.lines || []).forEach(ln => {
+      const tr = document.createElement('tr');
+      const amt = safeNumber(ln.amount);
+      tr.innerHTML = `<td>${ln.lineNo}</td><td>${ln.debitAccount || '-'}</td><td>${formatCurrency(amt)}</td><td>${ln.creditAccount || '-'}</td><td>${formatCurrency(amt)}</td><td>${ln.itemName || '-'}</td><td>${ln.qty ?? '-'}</td><td>${ln.unit || '-'}</td><td>${ln.costCenter || '-'}</td>`;
+      tbody.appendChild(tr);
+    });
+  }
+  const totalDebit = (journal.lines || []).reduce((sum, ln)=>sum + safeNumber(ln.amount),0);
+  const totalCredit = totalDebit; // prototype keeps symmetric amounts per line
+  if(totalDebitEl) totalDebitEl.textContent = `Total Debit (IDR): ${formatCurrency(totalDebit)}`;
+  if(totalCreditEl) totalCreditEl.textContent = `Total Credit (IDR): ${formatCurrency(totalCredit)}`;
+  if(warnEl){
+    const balanced = Math.abs(totalDebit - totalCredit) < 1e-6;
+    warnEl.classList.toggle('hidden', balanced);
+  }
+  openModal('modalJournalDetail');
+}
+
+function postJournalEntry(id){
+  const journal = state.inventoryJournals.find(j=>j.id===id);
+  if(!journal) return;
+  journal.status = 'POSTED';
+  journal.postedBy = state.currentUser.name;
+  journal.postedAt = new Date().toISOString();
+  renderAll();
+  openJournalDetail(id);
+  showToast('Journal posted');
+}
+
+function reverseJournalEntry(id){
+  const journal = state.inventoryJournals.find(j=>j.id===id);
+  if(!journal || journal.status !== 'POSTED') return;
+  const reversal = {
+    id: nextJournalId(),
+    postingDate: new Date().toISOString().slice(0,10),
+    property: journal.property,
+    sourceDocType: journal.sourceDocType,
+    sourceDocId: journal.sourceDocId,
+    status: 'POSTED',
+    createdBy: state.currentUser.name,
+    createdAt: new Date().toISOString(),
+    postedBy: state.currentUser.name,
+    postedAt: new Date().toISOString(),
+    reversedBy: null,
+    reversedAt: null,
+    notes: `Reversal of ${journal.id}`,
+    isReversal: true,
+    reversalOf: journal.id,
+    lines: (journal.lines || []).map((ln, idx)=>({
+      lineNo: idx + 1,
+      debitAccount: ln.creditAccount,
+      creditAccount: ln.debitAccount,
+      qty: ln.qty,
+      unit: ln.unit || null,
+      unitCost: ln.unitCost ?? null,
+      amount: safeNumber(ln.amount),
+      itemId: ln.itemId || null,
+      itemName: ln.itemName || null,
+      costCenter: ln.costCenter || null
+    }))
+  };
+  state.inventoryJournals.push(reversal);
+  journal.status = 'REVERSED';
+  journal.reversedBy = state.currentUser.name;
+  journal.reversedAt = new Date().toISOString();
+  renderAll();
+  openJournalDetail(reversal.id);
+  showToast('Journal reversed');
+}
+
+/* Inventory Ledger */
+function populateLedgerFilters(){
+  const propSel = document.getElementById('ledgerPropertyFilter');
+  if(propSel){
+    const props = getAllPropertiesForFilters();
+    const current = propSel.value || 'all';
+    propSel.innerHTML = ['<option value="all">All Properties</option>', ...props.map(p=>`<option value="${p}">${p}</option>`)].join('');
+    propSel.value = current;
+  }
+  const itemSel = document.getElementById('ledgerItemFilter');
+  if(itemSel){
+    const items = getCombinedInventory();
+    const current = itemSel.value || 'all';
+    itemSel.innerHTML = ['<option value="all">All Items</option>', ...items.map(it=>`<option value="${it.id}">${formatItemLabel(it)}</option>`)].join('');
+    itemSel.value = current;
+    if(!itemSel.dataset.searchableBound){
+      bindSearchableSelect(itemSel, items.map(it=>({ value: it.id, label: formatItemLabel(it) })));
+      itemSel.dataset.searchableBound = '1';
+    }
+  }
+}
+
+function computeInventoryLedger(filters){
+  const map = new Map();
+  const addRow = (property, itemId, itemName, inventoryType) => {
+    const key = `${property}__${itemId}`;
+    if(!map.has(key)){
+      map.set(key, { property, itemId, itemName, inventoryType, openingQty:0, incomingQty:0, outgoingQty:0, adjustmentQty:0, closingQty:0 });
+    }
+    return map.get(key);
+  };
+  const fromDate = filters.from ? new Date(filters.from) : null;
+  const toDate = filters.to ? new Date(filters.to) : null;
+  const processLine = (doc, line, direction, isAdjustment) => {
+    const property = doc.property || state.selectedProperty;
+    if(filters.property !== 'all' && property !== filters.property) return;
+    const itemId = line.itemId || (line.itemName || 'UNKNOWN');
+    const inventoryType = line.type || 'ROOM';
+    if(filters.type !== 'all' && inventoryType !== filters.type) return;
+    if(filters.item !== 'all' && filters.item !== itemId) return;
+    const itemName = line.itemName || 'Unknown';
+    const row = addRow(property, itemId, itemName, inventoryType);
+    const qty = safeNumber(line.qty);
+    const docDateStr = doc.date || doc.postingDate || '';
+    const docDate = docDateStr ? new Date(docDateStr) : null;
+    if(fromDate && docDate && docDate < fromDate){
+      const delta = direction === 'IN' ? qty : -qty;
+      row.openingQty += isAdjustment ? delta : delta;
+      return;
+    }
+    if(toDate && docDate && docDate > toDate) return;
+    if(isAdjustment){
+      row.adjustmentQty += direction === 'IN' ? qty : -qty;
+    } else if(direction === 'IN'){
+      row.incomingQty += qty;
+    } else if(direction === 'OUT'){
+      row.outgoingQty += qty;
+    }
+  };
+
+  state.incomingDocs.forEach(doc => {
+    if(doc.status === 'DISCARDED') return;
+    (doc.lines || []).forEach(line => {
+      const isAdj = doc.sourceType === 'ADJUSTMENT' || doc.sourceType === 'OPNAME_ADJUSTMENT';
+      processLine(doc, line, 'IN', isAdj);
+    });
+  });
+  state.outgoingDocs.forEach(doc => {
+    if(doc.status === 'DISCARDED') return;
+    (doc.lines || []).forEach(line => {
+      const isAdj = doc.destType === 'ADJUSTMENT' || doc.destType === 'OPNAME_ADJUSTMENT';
+      processLine(doc, line, 'OUT', isAdj);
+    });
+  });
+
+  const rows = Array.from(map.values()).map(r => {
+    r.closingQty = r.openingQty + r.incomingQty - r.outgoingQty + r.adjustmentQty;
+    return r;
+  });
+  const sorted = rows.sort((a,b)=>{
+    const dir = ledgerSort.direction === 'asc' ? 1 : -1;
+    if(ledgerSort.field === 'closingQty'){
+      return (a.closingQty - b.closingQty) * dir;
+    }
+    if(ledgerSort.field === 'property'){
+      return a.property.localeCompare(b.property) * dir;
+    }
+    return a.itemName.localeCompare(b.itemName) * dir;
+  });
+  return sorted;
+}
+
+function renderInventoryLedgerPage(){
+  populateLedgerFilters();
+  const tbody = document.getElementById('inventoryLedgerTableBody');
+  if(!tbody) return;
+  const filters = {
+    property: (document.getElementById('ledgerPropertyFilter') || {}).value || 'all',
+    item: (document.getElementById('ledgerItemFilter') || {}).value || 'all',
+    type: (document.getElementById('ledgerTypeFilter') || {}).value || 'all',
+    from: (document.getElementById('ledgerDateFrom') || {}).value || '',
+    to: (document.getElementById('ledgerDateTo') || {}).value || ''
+  };
+  const rows = computeInventoryLedger(filters);
+  tbody.innerHTML = '';
+  if(!rows.length){
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td colspan="8" style="text-align:center; color: var(--color-text-muted);">No ledger data</td>`;
+    tbody.appendChild(tr);
+  } else {
+    rows.forEach(r => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${r.property}</td><td>${r.itemName}</td><td>${r.inventoryType}</td><td>${r.openingQty}</td><td>${r.incomingQty}</td><td>${r.outgoingQty}</td><td>${r.adjustmentQty}</td><td>${r.closingQty}</td>`;
+      tbody.appendChild(tr);
+    });
+  }
+}
 function openModal(id){ const m = document.getElementById(id); if(!m) return; m.classList.remove('hidden'); }
 function closeModal(id){ const m = document.getElementById(id); if(!m) return; m.classList.add('hidden'); }
 

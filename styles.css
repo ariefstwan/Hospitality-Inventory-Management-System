@@ -659,6 +659,18 @@ th {
   background: #dcfce7;
   color: #166534;
 }
+.badge--journal-draft {
+  background: #e5e7eb;
+  color: #374151;
+}
+.badge--journal-posted {
+  background: #dcfce7;
+  color: #166534;
+}
+.badge--journal-reversed {
+  background: #fee2e2;
+  color: #b91c1c;
+}
 
 /* Forms/Grid */
 
@@ -1401,3 +1413,29 @@ th {
 .approval-chip--pending { color: #92400e; background: #fef3c7; }
 .approval-chip--approved { color: #166534; background: #dcfce7; }
 .approval-chip--rejected { color: #b91c1c; background: #fee2e2; }
+
+@media print {
+  .sidebar,
+  .header,
+  .filters-row,
+  .pagination,
+  .movement-actions,
+  .nav-dot,
+  .btn {
+    display: none !important;
+  }
+  body {
+    background: #fff;
+  }
+  .app-root,
+  .app-main,
+  .main,
+  .card {
+    box-shadow: none !important;
+    padding: 0;
+    margin: 0;
+  }
+  table {
+    width: 100%;
+  }
+}
